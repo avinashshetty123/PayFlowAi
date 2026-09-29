@@ -160,8 +160,8 @@ export default function DashboardPage() {
             </Card>
           </div>
           <p className="mt-4 text-[11px] text-subtle">
-            Historical data on this dashboard is labelled <b>Historical PayFlow</b> and was not produced by PayPal. Live
-            payments are PayPal Sandbox transactions (USD; INR shown only as a demo equivalent).
+            Historical data is labelled <b>Historical PayFlow</b> and was not produced by PayPal. Live
+            payments are real PayPal Sandbox transactions processed in USD.
           </p>
         </>
       )}

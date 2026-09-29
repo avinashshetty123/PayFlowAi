@@ -10,5 +10,5 @@ COPY . .
 
 EXPOSE 8000
 
-# Run migrations, then serve. (Seed separately: `python -m app.seed`.)
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# PORT is injected by Railway/Render; falls back to 8000 locally.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

@@ -53,8 +53,8 @@ export function SystemStatus() {
           detail={data ? `RAG: ${data.rag}` : undefined} />
         <Row label="Redis" value={data?.redis ?? "…"} tone={data?.redis === "HEALTHY" ? "good" : "warning"}
           detail={data?.celery_workers ? "Celery workers online" : "in-process worker fallback"} />
-        <Row label="Groq" value={data?.groq === "CONFIGURED" ? "CONNECTED" : "FALLBACK"} tone={data?.groq === "CONFIGURED" ? "good" : "warning"}
-          detail={data?.ai} />
+        <Row label="Groq AI" value={data?.groq === "CONFIGURED" ? "CONNECTED" : "NOT CONFIGURED"} tone={data?.groq === "CONFIGURED" ? "good" : "warning"}
+          detail={data?.groq === "CONFIGURED" ? `${data?.ai ?? "llama-3.3-70b-versatile"} · JSON mode` : "Using deterministic fallback investigator"} />
         <Row label="Webhook" value={webhook}
           tone={webhook === "VERIFIED" ? "good" : webhook === "VERIFICATION_FAILED" ? "critical" : webhook === "NOT_CONFIGURED" ? "neutral" : "info"}
           detail={data?.webhook_url ?? "set PAYPAL_WEBHOOK_ID + public tunnel"} />

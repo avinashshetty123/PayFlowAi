@@ -10,7 +10,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input, Label, Select } from "@/components/ui/input";
 import { useApi } from "@/hooks/use-api";
 import { api } from "@/lib/api";
-import { inrEquivalent, money, time } from "@/lib/format";
+import { money, time } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { CreatedOrder, LiveEvent } from "@/types/api";
 
@@ -227,7 +227,7 @@ export function LiveDemoProvider({ children }: { children: React.ReactNode }) {
                 <Label htmlFor="demo-amount">Amount (USD)</Label>
                 <Input id="demo-amount" type="number" min={1} step="0.01" value={amount}
                   onChange={(e) => setAmount(e.target.value)} className="font-mono" />
-                {amountValue > 0 && <p className="mt-1 text-[11px] text-subtle">{inrEquivalent(amountValue, "USD")}</p>}
+                <p className="mt-1 text-[11px] text-subtle">PayPal Sandbox processes USD only</p>
               </div>
               <div>
                 <Label htmlFor="demo-failure">
@@ -278,7 +278,7 @@ export function LiveDemoProvider({ children }: { children: React.ReactNode }) {
               <div>
                 <div className="font-mono text-base font-semibold">{order.payment.transaction_id}</div>
                 <div className="text-xs text-muted">
-                  {money(order.payment.amount, "USD")} · {inrEquivalent(order.payment.amount, "USD")} · PayPal order{" "}
+                  {money(order.payment.amount, "USD")} · PayPal Sandbox order{" "}
                   <span className="font-mono">{order.order_id}</span>
                 </div>
                 {order.armed_failures.length > 0 && (
