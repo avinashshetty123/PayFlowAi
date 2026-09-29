@@ -165,7 +165,7 @@ class PayPalProvider:
                 "description": description[:127],
                 "amount": {"currency_code": currency, "value": value},
             }],
-            "payment_source": {"paypal": {"experience_context": {
+            "application_context": {
                 "brand_name": settings.PAYPAL_BRAND_NAME,
                 "user_action": "PAY_NOW",
                 "shipping_preference": "NO_SHIPPING",
@@ -173,7 +173,7 @@ class PayPalProvider:
                 "locale": "en-US",
                 "return_url": return_url,
                 "cancel_url": cancel_url,
-            }}},
+            },
         }
         data, debug_id = await self._request(
             "POST", "/v2/checkout/orders", json_body=body,

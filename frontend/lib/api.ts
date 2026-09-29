@@ -119,4 +119,8 @@ export const api = {
     ),
 
   resetDemo: () => request<{ ok: boolean; payments: number; incidents: number; seconds: number }>("/api/demo/reset", { method: "POST" }),
+
+  simulatorScenarios: () => request<{ scenario: string; description: string; expects_incident: boolean; systems: Record<string, string> }[]>("/api/simulator/scenarios"),
+  simulate: (body: { scenario: string; amount: number; customer_id?: string; sync?: boolean }) =>
+    request<SimulationResult>("/api/simulator/payments", { method: "POST", body: JSON.stringify(body) }),
 };

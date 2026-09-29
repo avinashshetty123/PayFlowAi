@@ -8,6 +8,7 @@ import { ErrorBanner, PageHeader } from "@/components/app-shell";
 import { IncidentTypeChart, RecoveryChart, StatusChart, VolumeChart } from "@/components/charts";
 import { useLiveRefresh } from "@/components/event-stream";
 import { FailureInjectionPanel } from "@/components/failure-injection-panel";
+import { SimulationPanel } from "@/components/simulation-panel";
 import { IncidentTable } from "@/components/incident-table";
 import { useLiveDemo } from "@/components/live-demo";
 import { LivePipeline } from "@/components/live-pipeline";
@@ -135,10 +136,13 @@ export default function DashboardPage() {
                   <CardTitle>Recent incidents</CardTitle>
                   <Link href="/incidents" className="text-xs text-muted hover:text-foreground">View all →</Link>
                 </CardHeader>
-                <IncidentTable incidents={data.recent_incidents} empty="No incidents yet. Start a live demo." />
+                <IncidentTable incidents={data.recent_incidents} empty="No incidents yet. Start a live demo or run a simulation." />
               </Card>
             </div>
-            <FailureInjectionPanel compact />
+            <div className="space-y-4">
+              <SimulationPanel />
+              <FailureInjectionPanel compact />
+            </div>
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
