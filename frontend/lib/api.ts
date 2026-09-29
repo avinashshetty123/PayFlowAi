@@ -12,6 +12,7 @@ import type {
   Payment,
   PaymentDetail,
   ReconciliationMatrix,
+  SimulationResult,
   TimelineItem,
 } from "@/types/api";
 
