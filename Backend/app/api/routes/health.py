@@ -46,7 +46,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
     if not settings.PAYPAL_WEBHOOK_ID:
         webhook = "NOT_CONFIGURED"
     elif last_webhook is None:
-        webhook = "AWAITING_FIRST_EVENT"
+        webhook = "CONFIGURED"
     else:
         webhook = "VERIFIED" if last_webhook.signature_verified else (
             "PENDING_VERIFICATION" if last_webhook.signature_verified is None else "VERIFICATION_FAILED")

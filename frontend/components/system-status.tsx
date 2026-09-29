@@ -57,7 +57,7 @@ export function SystemStatus() {
           detail={data?.groq === "CONFIGURED" ? `${data?.ai ?? "llama-3.3-70b-versatile"} · JSON mode` : "Using deterministic fallback investigator"} />
         <Row label="Webhook" value={webhook}
           tone={webhook === "VERIFIED" ? "good" : webhook === "VERIFICATION_FAILED" ? "critical" : webhook === "NOT_CONFIGURED" ? "neutral" : "info"}
-          detail={data?.webhook_url ?? "set PAYPAL_WEBHOOK_ID + public tunnel"} />
+          detail={webhook === "NOT_CONFIGURED" ? "set PAYPAL_WEBHOOK_ID + public tunnel" : (data?.webhook_url ?? undefined)} />
         <Row label="Event stream" value={connected ? "CONNECTED" : "RECONNECTING"} tone={connected ? "good" : "warning"}
           detail={transport ? `SSE via ${transport}` : undefined} />
       </CardContent>
