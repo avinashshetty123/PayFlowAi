@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.schemas.payment import CreatePayPalOrderResponse, PaymentOut
 from app.services import paypal_service
-from app.services.demo_service import seed_demo_data
+from app.services.demo_service import seed_demo_data, truncate_all
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -52,3 +52,10 @@ async def ledger_mismatch_demo(body: LiveDemoRequest | None = None, db: AsyncSes
 async def reset_demo() -> dict:
     counts = await seed_demo_data()
     return {"ok": True, "message": "Demo data reset: historical PayFlow incidents reseeded", **counts}
+
+
+@router.post("/clear")
+async def clear_demo(db: AsyncSession = Depends(get_db)) -> dict:
+    """Wipe all data without reseeding. Leaves a completely fresh database."""
+    await truncate_all(db)
+    return {"ok": True, "message": "All data cleared. Database is now empty."}

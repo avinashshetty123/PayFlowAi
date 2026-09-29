@@ -165,14 +165,16 @@ class PayPalProvider:
                 "description": description[:127],
                 "amount": {"currency_code": currency, "value": value},
             }],
-            "application_context": {
-                "brand_name": settings.PAYPAL_BRAND_NAME,
-                "user_action": "PAY_NOW",
-                "shipping_preference": "NO_SHIPPING",
-                "landing_page": "LOGIN",
-                "locale": "en-US",
-                "return_url": return_url,
-                "cancel_url": cancel_url,
+            "payment_source": {
+                "paypal": {
+                    "experience_context": {
+                        "brand_name": settings.PAYPAL_BRAND_NAME,
+                        "shipping_preference": "NO_SHIPPING",
+                        "user_action": "PAY_NOW",
+                        "return_url": return_url,
+                        "cancel_url": cancel_url,
+                    }
+                }
             },
         }
         data, debug_id = await self._request(

@@ -120,6 +120,7 @@ export const api = {
     ),
 
   resetDemo: () => request<{ ok: boolean; payments: number; incidents: number; seconds: number }>("/api/demo/reset", { method: "POST" }),
+  clearDb: () => request<{ ok: boolean; message: string }>("/api/demo/clear", { method: "POST" }),
 
   simulatorScenarios: () => request<{ scenario: string; description: string; expects_incident: boolean; systems: Record<string, string> }[]>("/api/simulator/scenarios"),
   simulate: (body: { scenario: string; amount: number; customer_id?: string; sync?: boolean }) =>
