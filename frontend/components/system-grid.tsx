@@ -16,8 +16,8 @@ const TONE_TEXT = {
   good: "text-good",
   warning: "text-warning",
   serious: "text-serious",
-  critical: "text-[#f87171]",
-  info: "text-[#8fb0f5]",
+  critical: "text-critical",
+  info: "text-info",
   neutral: "text-muted",
 } as const;
 
@@ -66,7 +66,7 @@ export function ChangeList({ changes }: { changes: { system: string; from: strin
       {changes.map((c) => (
         <li key={c.system} className="flex items-center gap-2 font-mono text-xs">
           <span className="w-20 uppercase text-subtle">{c.system}</span>
-          <span className="text-[#f87171]">{c.from}</span>
+          <span className="text-critical">{c.from}</span>
           <ArrowRight className="size-3 text-subtle" />
           <span className="text-good">{c.to}</span>
         </li>

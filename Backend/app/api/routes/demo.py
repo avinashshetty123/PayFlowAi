@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,7 +20,7 @@ class LiveDemoRequest(BaseModel):
     negative_test: str | None = None
 
 
-async def _start(db: AsyncSession, body: LiveDemoRequest) -> CreatePayPalOrderResponse:
+async def _start(db: AsyncSession, body: LiveDemoRequest, origin: str | None = None) -> CreatePayPalOrderResponse:
     failures: list[str] = []
     if body.failure_scenario and body.failure_scenario != "NONE":
         failures.append(body.failure_scenario)
@@ -30,22 +30,24 @@ async def _start(db: AsyncSession, body: LiveDemoRequest) -> CreatePayPalOrderRe
         failures.append("VERIFICATION_TIMEOUT")
     created = await paypal_service.create_paypal_payment(
         db, amount=body.amount, demo=body.demo, failure_scenarios=failures, negative_test=body.negative_test,
+        return_origin=origin,
     )
     return CreatePayPalOrderResponse(payment=PaymentOut.model_validate(created.payment), order_id=created.order_id,
                                      approve_url=created.approve_url, armed_failures=failures)
 
 
 @router.post("/live", response_model=CreatePayPalOrderResponse, status_code=201)
-async def live_demo(body: LiveDemoRequest, db: AsyncSession = Depends(get_db)) -> CreatePayPalOrderResponse:
+async def live_demo(body: LiveDemoRequest, request: Request, db: AsyncSession = Depends(get_db)) -> CreatePayPalOrderResponse:
     """Start a live demo: real PayPal Sandbox order + (optional) armed PayFlow failure injection."""
-    return await _start(db, body)
+    return await _start(db, body, request.headers.get("origin"))
 
 
 @router.post("/real-time-ledger-mismatch", response_model=CreatePayPalOrderResponse, status_code=201)
-async def ledger_mismatch_demo(body: LiveDemoRequest | None = None, db: AsyncSession = Depends(get_db)) -> CreatePayPalOrderResponse:
+async def ledger_mismatch_demo(request: Request, body: LiveDemoRequest | None = None,
+                               db: AsyncSession = Depends(get_db)) -> CreatePayPalOrderResponse:
     body = body or LiveDemoRequest()
     body.demo = "LEDGER_MISMATCH"
-    return await _start(db, body)
+    return await _start(db, body, request.headers.get("origin"))
 
 
 @router.post("/reset")

@@ -91,7 +91,7 @@ export function FailureInjectionPanel({ transactionId, compact }: { transactionI
           className="border-warning/50 text-warning hover:bg-warning/10">
           <FlaskConical /> {busy ? "Injecting…" : "Inject Failure"}
         </Button>
-        {message && <p className={cn("text-xs", message.ok ? "text-good" : "text-[#f87171]")}>{message.text}</p>}
+        {message && <p className={cn("text-xs", message.ok ? "text-good" : "text-critical")}>{message.text}</p>}
       </CardContent>
     </Card>
   );

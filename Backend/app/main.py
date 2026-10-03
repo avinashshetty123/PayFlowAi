@@ -6,7 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import (
-    actions, audit, dashboard, demo, failures, health, incidents, payments, paypal, reconciliation, simulator, webhooks,
+    actions, audit, dashboard, demo, failures, health, incidents, notifications, payments, paypal, policies,
+    reconciliation, simulator, webhooks,
 )
 from app.events import stream
 from app.core.config import settings
@@ -14,6 +15,7 @@ from app.core.database import engine
 from app.core.errors import DomainError
 from app.core.logging import configure_logging
 from app.payments import ProviderError
+from app.workers import background
 
 logger = logging.getLogger("payflow")
 
@@ -27,7 +29,13 @@ async def lifespan(app: FastAPI):
         settings.PIPELINE_MODE,
         ("sandbox" + (" + webhooks" if settings.paypal_webhooks_enabled else "")) if settings.paypal_enabled else "not configured",
     )
+    logger.info("Platform: %s · public API %s", settings.platform, settings.public_api_url)
+    pump = background.start()
     yield
+    if pump is not None:
+        stop, task = pump
+        stop.set()
+        await task
     await engine.dispose()
 
 
@@ -43,6 +51,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -62,7 +71,7 @@ async def provider_error_handler(_: Request, exc: ProviderError) -> JSONResponse
 
 # paypal before payments so /payments/paypal/* is never shadowed by /payments/{transaction_id}
 for module in (health, dashboard, paypal, payments, simulator, incidents, actions, audit, reconciliation, demo, webhooks,
-               failures, stream):
+               failures, stream, notifications, policies):
     app.include_router(module.router, prefix="/api")
 
 

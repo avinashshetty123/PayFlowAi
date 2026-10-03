@@ -14,6 +14,7 @@ from app.schemas.payment import FailureInjectionOut, PaymentOut, ProviderTransac
 from app.services.audit_service import AuditService
 from app.services.incident_service import IncidentService
 from app.services.payment_service import PaymentService, snapshot
+from app.services.recon_insights import exposure_for, match_fingerprint
 from app.services.reconciliation_service import ReconciliationService
 
 
@@ -51,6 +52,9 @@ def summarize(
         provider_status=payment.provider_status,
         failure_source=incident.failure_source,
         injected_scenario=incident.injected_scenario,
+        risk_score=incident.risk_score,
+        resolution=incident.resolution,
+        acknowledged_by=incident.acknowledged_by,
     )
 
 
@@ -82,6 +86,10 @@ async def incident_detail(session: AsyncSession, incident_id: uuid.UUID) -> Inci
         payment=PaymentOut.model_validate(payment),
         investigation=InvestigationOut.model_validate(investigation) if investigation else None,
         actions=[ActionOut.model_validate(a) for a in actions],
+        risk_factors=incident.risk_factors,
+        acknowledged_at=incident.acknowledged_at,
+        resolution_note=incident.resolution_note,
+        agent_trace=incident.agent_trace or [],
         failure_injections=await failure_injections_out(session, payment.id),
         webhook_events=await webhook_events_out(session, payment.transaction_id),
         provider_transactions=await provider_transactions_out(session, payment.id),
@@ -155,6 +163,10 @@ _AUDIT_TIMELINE: dict[str, tuple[str | None, str, str]] = {
     "VERIFICATION_RETRY": ("Verification retry", "verification", "warn"),
     "FAILURE_INJECTED": ("Demo failure injected", "injection", "warn"),
     "RECONCILIATION_COMPLETED": ("Reconciliation completed", "detection", "info"),
+    "AI_RECOMMENDATION_OVERRIDDEN": ("AI recommendation overridden by policy", "policy", "warn"),
+    "INCIDENT_ACKNOWLEDGED": ("Acknowledged by operator", "human", "info"),
+    "INCIDENT_CLOSED": ("Closed as false positive", "human", "info"),
+    "HUMAN_RETRY_REQUESTED": ("Human authorised retry", "human", "ok"),
 }
 
 # Provider / webhook audit events shown on the incident timeline (payment-level, no incident id).
@@ -285,6 +297,9 @@ async def reconciliation_matrix(session: AsyncSession, limit: int = 60) -> dict:
             "incident_id": str(inc.id) if inc else None,
             "incident_number": inc.incident_number if inc else None,
             "incident_status": inc.status if inc else None,
+            "exposure": float(exposure_for(str(result.incident_type), payment.amount, None))
+            if result.incident_type else 0.0,
+            "fingerprint": match_fingerprint(snapshot(payment), payment.amount, payment.currency),
         })
     mismatched = sum(1 for r in rows if not r["consistent"])
     return {

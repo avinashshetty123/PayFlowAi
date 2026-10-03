@@ -114,6 +114,20 @@ async def get_webhook_events(session: AsyncSession, payment: Payment) -> list[di
     ]
 
 
+async def get_customer_history(session: AsyncSession, payment: Payment) -> dict:
+    """Recent incidents for the same customer (velocity / repeat-offender signal)."""
+    from sqlalchemy import func, select
+
+    from app.models import Incident
+
+    count = await session.scalar(
+        select(func.count()).select_from(Incident).join(Payment, Payment.id == Incident.payment_id)
+        .where(Payment.customer_id == payment.customer_id, Payment.id != payment.id)
+    )
+    payments = await session.scalar(select(func.count()).select_from(Payment).where(Payment.customer_id == payment.customer_id))
+    return {"customer_id": payment.customer_id, "other_incidents": int(count or 0), "payments": int(payments or 0)}
+
+
 TOOL_NAMES = [
     "get_payment",
     "get_gateway_status",
@@ -124,4 +138,5 @@ TOOL_NAMES = [
     "search_historical_incidents",
     "check_refund_eligibility",
     "get_webhook_events",
+    "get_customer_history",
 ]

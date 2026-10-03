@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.schemas.incident import AuditListResponse, AuditLogOut
+from app.services.audit_chain import seal_pending, verify_chain
 from app.services.audit_service import AuditService
 
 router = APIRouter(prefix="/audit", tags=["audit"])
@@ -18,3 +19,10 @@ async def list_audit(
 ) -> AuditListResponse:
     rows, total = await AuditService(db).list_logs(limit=limit, offset=offset, event=event, search=search)
     return AuditListResponse(items=[AuditLogOut.model_validate(r) for r in rows], total=total)
+
+
+@router.get("/verify")
+async def verify(db: AsyncSession = Depends(get_db)) -> dict:
+    """Seal anything pending, then walk the SHA-256 hash chain and report integrity."""
+    await seal_pending(db)
+    return await verify_chain(db)

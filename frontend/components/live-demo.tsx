@@ -93,7 +93,7 @@ function Progress({ order, events }: { order: CreatedOrder; events: LiveEvent[] 
               {hit ? (
                 <CheckCircle2 className={cn("size-3.5", hit.event.includes("FAILED") || hit.event.includes("DROPPED") ? "text-critical" : "text-good")} />
               ) : (
-                <CircleDashed className={cn("size-3.5", running && "animate-spin text-[#8fb0f5]")} />
+                <CircleDashed className={cn("size-3.5", running && "animate-spin text-info")} />
               )}
               <span>{step.label}</span>
               {hit && <span className="ml-auto font-mono text-[10px] text-subtle">{time(hit.timestamp)}</span>}
@@ -254,7 +254,7 @@ export function LiveDemoProvider({ children }: { children: React.ReactNode }) {
             {health?.negative_testing && (
               <div>
                 <Label htmlFor="demo-negative">
-                  <span className="rounded bg-critical/15 px-1 py-px text-[10px] font-semibold tracking-wider text-[#f87171]">PAYPAL NEGATIVE TESTING</span>{" "}
+                  <span className="rounded bg-critical/15 px-1 py-px text-[10px] font-semibold tracking-wider text-critical">PAYPAL NEGATIVE TESTING</span>{" "}
                   PayPal itself returns this error at capture
                 </Label>
                 <Select id="demo-negative" value={negative} onChange={(e) => setNegative(e.target.value)} className="font-mono text-xs">
@@ -266,7 +266,7 @@ export function LiveDemoProvider({ children }: { children: React.ReactNode }) {
               </div>
             )}
 
-            {error && <p className="rounded-md border border-critical/40 bg-critical/10 px-3 py-2 text-xs text-[#f87171]">{error}</p>}
+            {error && <p className="rounded-md border border-critical/40 bg-critical/10 px-3 py-2 text-xs text-critical">{error}</p>}
             <Button className="w-full" size="lg" onClick={start} disabled={busy || !(amountValue > 0)}>
               <Radio />
               {busy ? "Creating PayPal Sandbox order…" : "START LIVE DEMO"}

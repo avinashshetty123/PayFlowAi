@@ -22,6 +22,21 @@ failure to demonstrate autonomous recovery."*
 
 ---
 
+## What makes PayFlow different
+
+| Capability | Why it matters |
+|---|---|
+| **LangGraph incident agent** | The lifecycle is an explicit `StateGraph` (investigate → decide → execute/human gate → verify → reconcile). Every node is a deterministic PayFlow stage, so no LLM inside the graph can move money. The path each incident took is recorded and drawn in the console. |
+| **Policy can overrule the AI** | Guardrail **PB-001** checks the AI's action against the remediation playbook. In production the model once recommended `RETRY_WEBHOOK` for a ledger mismatch; the policy now rejects it and substitutes `RECONCILE_LEDGER`, and the override is audited. |
+| **Explainable risk score (0–100)** | Every decision carries a score with named factors (amount vs limit, AI uncertainty, incident type, repeat customer, outbound money). A score of 75 or more requires a human. |
+| **Kill switch + circuit breaker** | One switch pauses all autonomous financial actions. A rolling-window breaker caps automated fixes so runaway automation is contained. |
+| **Human resolution** | Escalated incidents can be acknowledged, retried with human authorisation (new idempotency attempt key), resolved after a fresh reconciliation (or with explicit risk acceptance), or closed as a false positive. |
+| **Rich AI analysis** | Root cause, confidence rationale, customer impact, financial exposure, blast radius, urgency, an ordered remediation plan, contributing factors, prevention and anomalies, from Groq (`reasoning_effort=low`, hidden reasoning) or the deterministic fallback. |
+| **Fintech-grade alerting** | P1–P4 severity routing to WhatsApp (Meta Cloud API), Telegram, phone push (ntfy), Slack or webhook, plus an in-app alert centre. Alerts are deduplicated and delivered from a transactional outbox with per-channel receipts. Unacknowledged P1/P2 alerts re-escalate, and alerts auto-resolve with the incident. Desktop notifications for P1/P2. |
+| **Tamper-evident audit** | A background sealer hash-chains audit records with SHA-256. `GET /api/audit/verify` proves integrity and pinpoints the first altered record. |
+| **Reconciliation analytics** | Money at risk per break, break ageing, SLA breaches by severity, auto-match rate, auto-heal rate, median time to resolve, and a per-payment match fingerprint. |
+| **Provider-replay guard** | PayPal order idempotency keys are globally unique, and any PayPal response whose amount differs from the request is refused. Both close a real production bug where a $10 order came back for a $50 request. |
+
 ## Architecture
 
 ```mermaid
@@ -215,6 +230,31 @@ Open <http://localhost:3000>.
 Keep the tunnel from Step 2 running (`ngrok http 8000`), and make sure the webhook URL in PayPal matches it. The
 dashboard's **System status → Webhook** turns `VERIFIED` after the first verified event.
 
+### Operator alerts (WhatsApp, Telegram, phone push)
+
+All channels are optional; configure any of them in `Backend/.env` (or the Render dashboard):
+
+| Channel | Setup |
+|---|---|
+| **Phone push (fastest)** | Install the free **ntfy** app, subscribe to a hard-to-guess topic, set `NTFY_TOPIC=<topic>`. |
+| **WhatsApp (Meta Cloud API)** | developers.facebook.com → your app → WhatsApp → API Setup: add the admin number as a recipient. Set `WHATSAPP_ACCESS_TOKEN` (use a permanent System User token in production; the API Setup token expires in 24h), `WHATSAPP_PHONE_NUMBER_ID`, `ALERT_WHATSAPP_TO=91XXXXXXXXXX`. Send any message to the business number from the admin phone once a day to keep the 24h window open for full-text alerts; outside it PayFlow falls back to the `hello_world` template as a wake-up ping. |
+| **Telegram** | Create a bot with @BotFather, message it once, read your chat id from `https://api.telegram.org/bot<token>/getUpdates`. Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. |
+| **Slack / Teams / PagerDuty bridge** | `SLACK_WEBHOOK_URL` or `ALERT_WEBHOOK_URL`. |
+
+Then open **Alerts → Send test alert**. Routing: P1/P2 → all channels, P3 → push/Slack/webhook, P4 → in-app only.
+Unacknowledged P1/P2 alerts are re-sent every `ALERT_ESCALATION_MINUTES` (max 3).
+
+### Local vs hosted (automatic)
+
+| Where it runs | API the console uses | Settings the API reads |
+|---|---|---|
+| `localhost:3000` | `http://localhost:8000` | `Backend/.env` overridden by `Backend/.env.local` (git-ignored) |
+| Vercel | `NEXT_PUBLIC_API_URL_PRODUCTION` (default `https://payflowai.onrender.com`) | Render dashboard env vars (`RENDER` is detected; `.env.local` is ignored) |
+
+PayPal return URLs follow the console that started the payment (localhost or any trusted `*.vercel.app` origin). Keep
+Render's internal hostnames (`dpg-…`, `red-…`) in Render only; locally `.env.local` points at Docker
+(`localhost:5433` / `localhost:6380`).
+
 ### PayPal negative testing (provider failures)
 
 Set `ENABLE_PAYPAL_NEGATIVE_TESTING=true`. The live-demo dialog then offers `INSTRUMENT_DECLINED`,
@@ -230,7 +270,7 @@ cd Backend
 pytest -q
 ```
 
-133 tests against a real PostgreSQL test database (`payflow_test`), with PayPal mocked at the HTTP layer
+147 tests against a real PostgreSQL test database (`payflow_test`), with PayPal mocked at the HTTP layer
 (`tests/paypal_mock.py`). There are no live credentials in tests. Coverage includes OAuth caching and 401
 refresh, the sandbox-only guard, order, capture and refund idempotency headers, webhook signature verification
 (raw body passed verbatim), duplicate and malformed webhooks, every failure-injection scenario, provider failures,
@@ -302,6 +342,12 @@ publishing. Front end: `npm run typecheck`, `npm run lint`, `npm run build`.
 | GET / POST | `/api/failures/scenarios`, `/api/failures/inject` | Demo failure injection |
 | POST | `/api/demo/live`, `/api/demo/real-time-ledger-mismatch` | One-click live demos |
 | POST | `/api/demo/reset` | Reseed historical data |
+| POST | `/api/incidents/{id}/acknowledge` · `/retry` · `/resolve` · `/close` | Human resolution of escalated incidents |
+| GET / POST | `/api/notifications`, `/{id}/ack`, `/ack-all`, `/channels`, `/test` | Alert centre, receipts, channel setup check |
+| GET / POST | `/api/policies`, `/api/policies/kill-switch`, `/api/policies/simulate` | Policy-as-code, kill switch, what-if simulator |
+| GET | `/api/agent/graph` | LangGraph topology (+ mermaid) |
+| GET | `/api/audit/verify` | SHA-256 audit-chain integrity proof |
+| GET | `/api/reconciliation/summary` | Exposure, ageing, SLA, auto-heal, MTTR |
 | GET / POST | `/api/incidents…`, `/api/actions/{id}/approve|reject`, `/api/audit`, `/api/reconciliation…` | As before |
 
 ## Resilience

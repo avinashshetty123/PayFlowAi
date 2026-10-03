@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Fragment, useState } from "react";
 
 import { ErrorBanner, PageHeader } from "@/components/app-shell";
+import { AuditIntegrityBanner } from "@/components/recon-insights";
 import { useLiveRefresh } from "@/components/event-stream";
 import { Card } from "@/components/ui/card";
 import { Input, Select } from "@/components/ui/input";
@@ -39,6 +40,7 @@ export default function AuditPage() {
         title="Audit log"
         description="Append-only record of every important operation: actor, reason, evidence, result, timestamp."
       />
+      <AuditIntegrityBanner />
       {error && <ErrorBanner message={error} />}
       <div className="mb-3 flex flex-wrap gap-2">
         <Input placeholder="Search transaction, actor, reason…" value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-xs" />

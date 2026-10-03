@@ -91,6 +91,13 @@ class IncidentService:
             result={"incident_number": incident.incident_number, "status": incident.status},
             at=now,
         )
+        from app.services.audit_service import SUPPRESS_EVENTS
+
+        if not self.session.info.get(SUPPRESS_EVENTS):
+            from app.notifications.service import raise_alert
+
+            await raise_alert(self.session, incident=incident, payment=payment, kind="INCIDENT_OPENED",
+                              detail=result.summary)
         return incident, True
 
     async def _attribute(self, incident: Incident, payment: Payment) -> None:

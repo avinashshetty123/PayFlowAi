@@ -1,5 +1,12 @@
 import type {
   ActionDecision,
+  AgentGraph,
+  AuditIntegrity,
+  ChannelConfig,
+  NotificationList,
+  PolicyCatalog,
+  PolicySimulation,
+  ReconSummary,
   CaptureResult,
   CreatedOrder,
   FailureCatalog,
@@ -16,7 +23,27 @@ import type {
   TimelineItem,
 } from "@/types/api";
 
-export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
+const LOCAL_API = "http://localhost:8000";
+// Hosted backend used when the console runs on Vercel (override with NEXT_PUBLIC_API_URL_PRODUCTION).
+const PRODUCTION_API = process.env.NEXT_PUBLIC_API_URL_PRODUCTION ?? "https://payflowai.onrender.com";
+const isLocalUrl = (url: string) => /\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(url);
+
+/**
+ * Local console → local API, hosted console (Vercel) → hosted API (Render), automatically.
+ * An explicit NEXT_PUBLIC_API_URL wins only when it matches where the console runs, so a
+ * localhost value baked into a Vercel build can never point production at a laptop.
+ */
+function resolveApiUrl(): string {
+  const explicit = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
+  if (typeof window === "undefined") return explicit ?? LOCAL_API;
+  const consoleIsLocal = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  if (consoleIsLocal) return explicit && isLocalUrl(explicit) ? explicit : LOCAL_API;
+  return explicit && !isLocalUrl(explicit) ? explicit : PRODUCTION_API.replace(/\/$/, "");
+}
+
+export const API_URL = resolveApiUrl();
+/** Environment label for the console chrome. Browser-only: call after mount to avoid hydration mismatch. */
+export const environmentLabel = () => (isLocalUrl(resolveApiUrl()) ? "Local" : "Production");
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -118,6 +145,43 @@ export const api = {
       "/api/reconciliation/run",
       { method: "POST" },
     ),
+
+  // ---- notifications ----
+  notifications: (p: { status?: string; severity?: string; limit?: number } = {}) =>
+    request<NotificationList>(`/api/notifications${qs(p)}`),
+  notificationChannels: () => request<ChannelConfig>("/api/notifications/channels"),
+  ackNotification: (id: string, by: string) =>
+    request<{ ok: boolean }>(`/api/notifications/${id}/ack`, { method: "POST", body: JSON.stringify({ by }) }),
+  ackAllNotifications: (by: string) =>
+    request<{ ok: boolean; acknowledged: number }>("/api/notifications/ack-all", { method: "POST", body: JSON.stringify({ by }) }),
+  testAlert: (by: string) =>
+    request<{ ok: boolean; results: { channel: string; target: string; status: string; error?: string }[]; message?: string }>(
+      "/api/notifications/test", { method: "POST", body: JSON.stringify({ by }) }),
+
+  // ---- human resolution ----
+  acknowledgeIncident: (id: string, by: string) =>
+    request<{ ok: boolean }>(`/api/incidents/${encodeURIComponent(id)}/acknowledge`, { method: "POST", body: JSON.stringify({ by }) }),
+  retryIncident: (id: string, by: string, note?: string) =>
+    request<{ ok: boolean; incident_status: string; message: string }>(
+      `/api/incidents/${encodeURIComponent(id)}/retry`, { method: "POST", body: JSON.stringify({ by, note }) }),
+  resolveIncident: (id: string, by: string, note: string, acceptRisk: boolean) =>
+    request<{ ok: boolean; incident_status: string; resolution: string }>(
+      `/api/incidents/${encodeURIComponent(id)}/resolve`,
+      { method: "POST", body: JSON.stringify({ by, note, accept_risk: acceptRisk }) }),
+  closeIncident: (id: string, by: string, note: string) =>
+    request<{ ok: boolean; incident_status: string }>(
+      `/api/incidents/${encodeURIComponent(id)}/close`, { method: "POST", body: JSON.stringify({ by, note }) }),
+
+  // ---- policy & controls ----
+  policies: () => request<PolicyCatalog>("/api/policies"),
+  setKillSwitch: (enabled: boolean, reason: string, by: string) =>
+    request<PolicyCatalog["kill_switch"]>("/api/policies/kill-switch", {
+      method: "POST", body: JSON.stringify({ enabled, reason, by }) }),
+  simulatePolicy: (body: { transaction_id: string; action?: string; human_approved?: boolean }) =>
+    request<PolicySimulation>("/api/policies/simulate", { method: "POST", body: JSON.stringify(body) }),
+  agentGraph: () => request<AgentGraph>("/api/agent/graph"),
+  auditVerify: () => request<AuditIntegrity>("/api/audit/verify"),
+  reconSummary: () => request<ReconSummary>("/api/reconciliation/summary"),
 
   resetDemo: () => request<{ ok: boolean; payments: number; incidents: number; seconds: number }>("/api/demo/reset", { method: "POST" }),
   clearDb: () => request<{ ok: boolean; message: string }>("/api/demo/clear", { method: "POST" }),

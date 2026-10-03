@@ -137,6 +137,7 @@ async def create_paypal_payment(
     failure_scenarios: list[str] | None = None,
     negative_test: str | None = None,
     description: str | None = None,
+    return_origin: str | None = None,
 ) -> CreatedOrder:
     if not settings.paypal_enabled:
         raise ProviderUnavailableError("PayPal Sandbox credentials are not configured (PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET)")
@@ -197,12 +198,15 @@ async def create_paypal_payment(
         await injections.arm(payment, scenario, metadata={"armed_at": "order-creation"})
     await session.commit()
 
-    key = paypal_order_key(txn)
+    # Globally unique: transaction numbers restart after a DB reset, and PayPal replays the cached
+    # response for a reused PayPal-Request-Id (a $10 order came back for a $50 request in production).
+    key = paypal_order_key(f"{txn}:{payment.id.hex[:12]}")
+    base = settings.frontend_base(return_origin)
     try:
         order = await get_provider().create_order(
             reference=txn, amount=amount, currency="USD", description=description,
-            return_url=f"{settings.FRONTEND_URL}/checkout/return?txn={txn}",
-            cancel_url=f"{settings.FRONTEND_URL}/checkout/cancel?txn={txn}",
+            return_url=f"{base}/checkout/return?txn={txn}",
+            cancel_url=f"{base}/checkout/cancel?txn={txn}",
             idempotency_key=key,
         )
     except ProviderError as exc:
@@ -219,6 +223,20 @@ async def create_paypal_payment(
         )
         await session.commit()
         raise ProviderUnavailableError(f"PayPal Sandbox order creation failed: {exc.message}") from exc
+
+    if order.amount is not None and (order.amount != amount or (order.currency or "USD") != "USD"):
+        # Never accept a provider object that is not the one we asked for.
+        payment.provider_status = "ORDER_REJECTED"
+        payment.gateway_status = str(GatewayStatus.FAILED)
+        PaymentStateService.transition(payment, PaymentState.FAILED)
+        await audit.record(
+            transaction_id=txn, event=AuditEvent.PROVIDER_CALL_FAILED, actor=CONNECTOR,
+            reason=f"PayPal returned order {order.order_id} for {money(order.amount, order.currency)} but "
+                   f"{money(amount, 'USD')} was requested; rejected (idempotency conflict guard)",
+            evidence={"order_id": order.order_id, "requested": amount, "returned": order.amount, "key": key},
+        )
+        await session.commit()
+        raise ProviderUnavailableError("PayPal returned a different order than requested; refused for safety")
 
     payment.provider_order_id = order.order_id
     payment.provider_status = order.status

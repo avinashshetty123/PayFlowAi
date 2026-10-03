@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.services import query_service
+from app.services import query_service, recon_insights
 from app.services.orchestrator import detect
 from app.services.payment_service import PaymentService
 from app.workers.dispatcher import dispatch_incident_pipeline
@@ -13,6 +13,11 @@ router = APIRouter(prefix="/reconciliation", tags=["reconciliation"])
 @router.get("")
 async def matrix(limit: int = Query(60, ge=1, le=200), db: AsyncSession = Depends(get_db)) -> dict:
     return await query_service.reconciliation_matrix(db, limit=limit)
+
+
+@router.get("/summary")
+async def summary(db: AsyncSession = Depends(get_db)) -> dict:
+    return await recon_insights.summary(db)
 
 
 @router.post("/run")

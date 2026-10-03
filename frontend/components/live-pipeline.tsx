@@ -43,7 +43,7 @@ export function LivePipeline({ limit = 18 }: { limit?: number }) {
                         </Link>
                       )}
                       {event.incidentId && (
-                        <Link href={`/incidents/${event.incidentId}`} className="text-[11px] text-[#8fb0f5] hover:underline">
+                        <Link href={`/incidents/${event.incidentId}`} className="text-[11px] text-info hover:underline">
                           incident →
                         </Link>
                       )}

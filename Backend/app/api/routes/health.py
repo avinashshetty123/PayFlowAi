@@ -12,7 +12,14 @@ from app.events.bus import redis_publishing_ok
 from app.models import WebhookEvent
 from app.payments import get_provider
 from app.rag.historical_service import HistoricalIncidentService
+from app.notifications.service import channel_status
 from app.workers.dispatcher import celery_workers_alive, resolve_mode
+
+
+def agent_engine() -> str:
+    from app.agents.incident_graph import LANGGRAPH_AVAILABLE
+
+    return "langgraph" if LANGGRAPH_AVAILABLE else "sequential-fallback"
 
 router = APIRouter(tags=["health"])
 
@@ -68,5 +75,9 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
         "ai": f"groq:{settings.GROQ_MODEL}" if settings.groq_enabled else "deterministic fallback (GROQ_API_KEY not set)",
         "rag": "pgvector" if pgvector else "python cosine fallback",
         "failure_injection": settings.ENABLE_FAILURE_INJECTION,
+        "platform": settings.platform,
+        "public_api_url": settings.public_api_url,
+        "agent_engine": agent_engine(),
+        "alert_channels": [c["channel"] for c in channel_status() if c["configured"]],
         "negative_testing": settings.ENABLE_PAYPAL_NEGATIVE_TESTING,
     }

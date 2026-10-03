@@ -19,6 +19,7 @@ from app.core.database import SessionLocal
 from app.core.enums import Scenario
 from app.models.base import utcnow
 from app.rag.historical_service import HistoricalIncidentService
+from app.services.audit_chain import reset_chain
 from app.services.audit_service import SUPPRESS_EVENTS
 from app.services.orchestrator import ingest_simulated_payment, run_action_stage, run_investigation_stage
 
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 HISTORICAL = {"currency": "USD", "provider": "PAYFLOW_HISTORICAL"}
 
 TABLES = (
+    "notification_deliveries", "notifications", "app_settings",
     "approvals", "reconciliation_runs", "failure_injections", "webhook_events", "provider_transactions",
     "audit_logs", "actions", "investigations", "incidents", "ledger_entries", "merchant_transactions",
     "bank_transactions", "payment_events", "payments", "historical_incidents",
@@ -148,6 +150,8 @@ async def seed_demo_data(factory: async_sessionmaker[AsyncSession] | None = None
             )
             await _backdate(session, ids, txns, utcnow() - target)
 
+    async with factory() as session:
+        await reset_chain(session)  # backdating rewrote timestamps: let the sealer re-chain everything
     counts["seconds"] = round(time.perf_counter() - started, 2)
     logger.info("Seeded demo data: %s", counts)
     return counts

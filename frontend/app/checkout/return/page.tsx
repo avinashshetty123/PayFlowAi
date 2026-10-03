@@ -37,7 +37,7 @@ function CaptureAfterApproval() {
 
   return (
     <Card className="mx-auto mt-10 max-w-lg p-6 text-center">
-      {missing && <p className="text-sm text-[#f87171]">Missing PayPal order token in the return URL.</p>}
+      {missing && <p className="text-sm text-critical">Missing PayPal order token in the return URL.</p>}
       {!missing && !result && !error && (
         <>
           <CircleDashed className="mx-auto size-8 animate-spin text-primary" />
@@ -65,7 +65,7 @@ function CaptureAfterApproval() {
         <>
           <XCircle className="mx-auto size-8 text-critical" />
           <h1 className="mt-3 text-lg font-semibold">Capture did not complete</h1>
-          <p className="mt-1 text-sm text-[#f87171]">{error}</p>
+          <p className="mt-1 text-sm text-critical">{error}</p>
         </>
       )}
       <Button asChild variant="outline" size="sm" className="mt-5">

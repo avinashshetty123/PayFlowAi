@@ -11,7 +11,8 @@ const TONES: Record<string, BadgeTone> = {
   HUMAN_APPROVAL_REQUIRED: "warning", REFUND_PENDING: "warning", REFUND_REQUESTED: "warning", MEDIUM: "warning",
   PROCESSING: "info", OPEN: "info", INVESTIGATING: "info", REMEDIATING: "info", EXECUTING: "info", CREATED: "info",
   ANALYZING: "info", QUEUED: "neutral", NOT_APPLICABLE: "neutral", NOT_FOUND: "neutral",
-  ESCALATED: "serious", HIGH: "serious",
+  ESCALATED: "serious", HIGH: "serious", CLOSED: "neutral", ACKNOWLEDGED: "info", SENT: "good",
+  AUTOMATED: "good", HUMAN_APPROVED: "good", MANUAL: "good", ACCEPTED_RISK: "warning", FALSE_POSITIVE: "neutral",
   FAILED: "critical", NOT_RECEIVED: "critical", TIMEOUT: "critical", UNKNOWN: "critical", REFUND_FAILED: "critical",
   DENY: "critical", REJECTED: "critical", CRITICAL: "critical", DUPLICATE: "critical",
 };

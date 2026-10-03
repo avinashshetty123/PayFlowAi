@@ -55,7 +55,7 @@ export function ApprovalActions({
           {busy === "reject" ? "Rejecting…" : "REJECT"}
         </Button>
       </div>
-      {error && <p className="mt-2 text-xs text-[#f87171]">{error}</p>}
+      {error && <p className="mt-2 text-xs text-critical">{error}</p>}
     </div>
   );
 }

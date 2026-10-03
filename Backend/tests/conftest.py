@@ -12,13 +12,17 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-_env = dotenv_values(Path(__file__).resolve().parent.parent / ".env")
+_backend = Path(__file__).resolve().parent.parent
+_env = {**dotenv_values(_backend / ".env"), **dotenv_values(_backend / ".env.local")}
 _base_url = os.environ.get("DATABASE_URL") or _env.get("DATABASE_URL") or "postgresql+asyncpg://postgres:postgres@localhost:5432/payflow"
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or _base_url.rsplit("/", 1)[0] + "/payflow_test"
 
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["DB_NULL_POOL"] = "true"
 os.environ["PIPELINE_MODE"] = "sync"
+os.environ["BACKGROUND_PUMP_ENABLED"] = "false"
+for _channel_var in ("WHATSAPP_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN", "NTFY_TOPIC", "SLACK_WEBHOOK_URL", "ALERT_WEBHOOK_URL"):
+    os.environ[_channel_var] = ""
 os.environ["PIPELINE_STEP_DELAY_SECONDS"] = "0"
 os.environ["GROQ_API_KEY"] = ""  # deterministic investigator unless a test injects a client
 # PayPal: tests never call the real sandbox; a mocked transport is injected (see paypal_mock.py).

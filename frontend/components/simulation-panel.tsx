@@ -15,7 +15,7 @@ import type { SimulationResult } from "@/types/api";
 
 const TONE: Record<string, string> = {
   SUCCESS: "text-good", SETTLED: "text-good",
-  FAILED: "text-[#f87171]", REFUND_FAILED: "text-[#f87171]",
+  FAILED: "text-critical", REFUND_FAILED: "text-critical",
   PENDING: "text-warning", DELAYED: "text-warning",
   UNKNOWN: "text-muted", NOT_RECEIVED: "text-muted",
 };
@@ -104,7 +104,7 @@ export function SimulationPanel() {
         </Button>
 
         {error && (
-          <p className="flex items-center gap-1.5 text-xs text-[#f87171]">
+          <p className="flex items-center gap-1.5 text-xs text-critical">
             <XCircle className="size-3.5 shrink-0" /> {error}
           </p>
         )}

@@ -19,6 +19,10 @@ class PolicyEvaluation(BaseModel):
     label: str
     reasons: list[str]
     checks: list[PolicyCheck]
+    fired_rules: list[str] = []
+    risk_score: int | None = None
+    policy_version: str | None = None
+    overridden_ai_action: str | None = None
 
 
 class ActionOut(ORMModel):

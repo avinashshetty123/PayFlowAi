@@ -37,7 +37,12 @@ from app.models.base import utcnow
 from app.services.action_executor import EXECUTOR_ACTOR, ActionExecutor
 from app.services.audit_service import AuditService
 from app.services.incident_service import IncidentService
-from app.services.notification_service import notify
+from app.events.bus import emit
+from app.notifications.service import ack_incident_alerts, raise_alert
+from app.services.audit_service import SUPPRESS_EVENTS
+from app.services.control_service import automation_rate, kill_switch
+from app.services.playbook import playbook_action
+from app.services.risk_service import RiskScore, score_risk
 from app.services.payment_service import PaymentService, PaymentStateService, snapshot
 from app.services.policy_service import PolicyContext, PolicyEngine
 from app.services.reconciliation_service import ReconciliationResult, ReconciliationService
@@ -52,7 +57,7 @@ POLICY_ACTOR = "policy-engine"
 VERIFIER_ACTOR = "verification-service"
 ORCHESTRATOR_ACTOR = "payflow-orchestrator"
 
-TERMINAL_INCIDENT_STATUSES = (IncidentStatus.RESOLVED,)
+TERMINAL_INCIDENT_STATUSES = (IncidentStatus.RESOLVED, IncidentStatus.CLOSED)
 
 
 async def _pause(delay: float) -> None:
@@ -151,23 +156,43 @@ async def ingest_simulated_payment(
 # ---- INVESTIGATE + DECIDE ------------------------------------------------------------------
 
 
-async def run_investigation_stage(
+# ---- agent trace (LangGraph node path, also streamed live) -----------------------------------------
+
+
+def _trace(session: AsyncSession, incident: Incident, payment: Payment, node: str, outcome: str) -> None:
+    incident.agent_trace = [*(incident.agent_trace or []),
+                            {"node": node, "at": utcnow().isoformat(), "outcome": outcome}][-60:]
+    if not session.info.get(SUPPRESS_EVENTS):
+        emit(session, "AGENT_STEP", transaction_id=payment.transaction_id, incident_id=incident.id,
+             incident_number=incident.incident_number, data={"node": node, "outcome": outcome, "reason": f"{node} → {outcome}"})
+
+
+async def _alert(session: AsyncSession, incident: Incident, payment: Payment, kind: str, detail: str) -> None:
+    if session.info.get(SUPPRESS_EVENTS):
+        return  # bulk seeding never pages anyone
+    await raise_alert(session, incident=incident, payment=payment, kind=kind, detail=detail)
+
+
+# ---- INVESTIGATE ---------------------------------------------------------------------------------------
+
+
+async def investigate_step(
     session: AsyncSession, incident_id: uuid.UUID, *, force_fallback: bool = False, delay: float = 0.0
-) -> uuid.UUID | None:
-    """Investigate an incident and evaluate policy. Returns an action id ready to execute, if any."""
+) -> bool:
+    """AI investigation with read-only tools + RAG. Returns False if the incident is already closed."""
     incidents = IncidentService(session)
     audit = AuditService(session)
     incident = await incidents.reload(incident_id)
     payment = await PaymentService(session).reload(incident.payment_id)
     txn = payment.transaction_id
-
     if incident.status in TERMINAL_INCIDENT_STATUSES:
-        return None
+        return False
 
     incident.status = str(IncidentStatus.INVESTIGATING)
+    _trace(session, incident, payment, "investigate", "started")
     await audit.record(
         transaction_id=txn, incident_id=incident.id, event=AuditEvent.INVESTIGATION_STARTED, actor=AI_ACTOR,
-        reason="Collecting evidence from gateway, bank, merchant, ledger, webhook and historical incidents",
+        reason="Collecting evidence from provider, settlement, merchant, ledger, webhooks, customer history and RAG",
         evidence={"incident_type": incident.type, "snapshot": snapshot(payment)},
     )
     await session.commit()
@@ -175,24 +200,13 @@ async def run_investigation_stage(
 
     outcome = await InvestigatorService(session).investigate(incident, payment, force_fallback=force_fallback)
     result = outcome.result
-    session.add(
-        Investigation(
-            incident_id=incident.id,
-            model=outcome.model,
-            used_fallback=outcome.used_fallback,
-            summary=result.summary,
-            evidence=to_jsonable({
-                "facts": result.evidence,
-                "tool_calls": outcome.tool_calls,
-                "fallback_reason": outcome.fallback_reason,
-                "bundle": outcome.bundle,
-            }),
-            historical_matches=to_jsonable(outcome.matches),
-            recommendation=result.to_public(),
-            latency_ms=outcome.latency_ms,
-            created_at=utcnow(),
-        )
-    )
+    session.add(Investigation(
+        incident_id=incident.id, model=outcome.model, used_fallback=outcome.used_fallback, summary=result.summary,
+        evidence=to_jsonable({"facts": result.evidence, "tool_calls": outcome.tool_calls,
+                              "fallback_reason": outcome.fallback_reason, "bundle": outcome.bundle}),
+        historical_matches=to_jsonable(outcome.matches), recommendation=result.to_public(),
+        latency_ms=outcome.latency_ms, created_at=utcnow(),
+    ))
     incident.root_cause = result.root_cause
     incident.confidence = result.confidence
     incident.ai_summary = result.summary
@@ -210,34 +224,90 @@ async def run_investigation_stage(
         )
     await audit.record(
         transaction_id=txn, incident_id=incident.id, event=AuditEvent.AI_RECOMMENDATION_CREATED,
-        actor=f"{AI_ACTOR} ({outcome.model})",
-        reason=f"Root cause: {result.root_cause}",
-        evidence={"facts": result.evidence, "used_fallback": outcome.used_fallback,
-                  "fallback_reason": outcome.fallback_reason},
+        actor=f"{AI_ACTOR} ({outcome.model})", reason=f"Root cause: {result.root_cause}",
+        evidence={"facts": result.evidence, "used_fallback": outcome.used_fallback, "fallback_reason": outcome.fallback_reason},
         result=result.to_public(),
     )
+    _trace(session, incident, payment, "investigate",
+           f"{result.recommended_action} @ {round(result.confidence * 100)}%" + (" (fallback)" if outcome.used_fallback else ""))
     await session.commit()
     await _pause(delay)
+    return True
 
-    # DECIDE: deterministic policy, AI cannot override it.
+
+# ---- DECIDE --------------------------------------------------------------------------------------------
+
+
+@dataclass
+class Decision:
+    route: str  # act | human | done
+    action_id: uuid.UUID | None = None
+
+
+async def _policy_context(session: AsyncSession, incident: Incident, payment: Payment, *, human_approved: bool = False,
+                          action: str | None = None) -> tuple[PolicyContext, "RiskScore"]:
+    from app.ai.tools import get_customer_history
+
+    history = await get_customer_history(session, payment)
+    risk = score_risk(
+        incident_type=incident.type, amount=payment.amount, currency=payment.currency, ai_confidence=incident.confidence,
+        ai_risk=incident.risk, action=action or incident.recommended_action,
+        repeat_incidents=history["other_incidents"], provider_failure=incident.failure_source == "PAYPAL_PROVIDER_FAILURE",
+    )
+    switch = await kill_switch(session)
+    rate = await automation_rate(session)
     ctx = PolicyContext.from_payment(
         payment,
         bank_amount=await _bank_amount(session, payment),
         ledger_amount=await _ledger_amount(session, payment),
         refund_completed=await _refund_completed(session, payment),
-        ai_confidence=result.confidence,
-        ai_risk=str(result.risk),
-        ai_requires_human=result.requires_human,
+        ai_confidence=incident.confidence, ai_risk=incident.risk, ai_requires_human=incident.requires_human,
+        incident_type=incident.type, risk_score=risk.score, kill_switch=switch["enabled"],
+        automation_tripped=rate["tripped"], human_approved=human_approved,
     )
+    return ctx, risk
+
+
+async def decide_step(session: AsyncSession, incident_id: uuid.UUID, *, delay: float = 0.0) -> Decision:
+    """Deterministic policy decision. The AI cannot override it; the policy CAN override the AI."""
+    incidents = IncidentService(session)
+    audit = AuditService(session)
+    incident = await incidents.reload(incident_id)
+    payment = await PaymentService(session).reload(incident.payment_id)
+    txn = payment.transaction_id
     engine = PolicyEngine()
-    evaluation = engine.evaluate(str(result.recommended_action), ctx)
+
+    ai_action = incident.recommended_action or str(playbook_action(incident.type))
+    ctx, risk = await _policy_context(session, incident, payment, action=ai_action)
+    evaluation = engine.evaluate(ai_action, ctx)
+    chosen = ai_action
+    if evaluation.decision == PolicyDecision.DENY and "PB-001" in evaluation.fired_rules:
+        fallback = str(playbook_action(incident.type))
+        ctx, risk = await _policy_context(session, incident, payment, action=fallback)
+        override = engine.evaluate(fallback, ctx)
+        override.overridden_ai_action = ai_action
+        override.reasons.insert(0, f"AI recommended {ai_action}; guardrail PB-001 replaced it with playbook action {fallback}")
+        await audit.record(
+            transaction_id=txn, incident_id=incident.id, event=AuditEvent.AI_RECOMMENDATION_OVERRIDDEN, actor=POLICY_ACTOR,
+            reason=f"AI recommendation {ai_action} is not valid for {incident.type}; using playbook action {fallback}",
+            evidence={"ai_action": ai_action, "allowed": [c.detail for c in evaluation.checks[:1]]},
+            result={"chosen_action": fallback},
+        )
+        evaluation, chosen = override, fallback
+
+    incident.risk_score = risk.score
+    incident.risk_factors = risk.as_dict()
     incident.policy_decision = str(evaluation.decision)
+    incident.recommended_action = chosen
     await audit.record(
         transaction_id=txn, incident_id=incident.id, event=AuditEvent.POLICY_EVALUATED, actor=POLICY_ACTOR,
         reason=f"{evaluation.label}: {'; '.join(evaluation.reasons)}",
-        evidence={"action": evaluation.action_type, "checks": [c.model_dump() for c in evaluation.checks]},
-        result={"decision": str(evaluation.decision)},
+        evidence={"action": evaluation.action_type, "checks": [c.model_dump() for c in evaluation.checks],
+                  "fired_rules": evaluation.fired_rules, "policy_version": evaluation.policy_version,
+                  "risk": risk.as_dict()},
+        result={"decision": str(evaluation.decision), "risk_score": risk.score},
     )
+    _trace(session, incident, payment, "decide", f"{evaluation.decision} {chosen} · risk {risk.score}")
     await session.commit()
     await _pause(delay)
 
@@ -246,15 +316,13 @@ async def run_investigation_stage(
         escalation = engine.evaluate(ActionType.ESCALATE, ctx)
         action, created = await executor.request(
             incident=incident, payment=payment, action_type=ActionType.ESCALATE, policy=escalation,
-            requested_by=POLICY_ACTOR,
-            reason=f"Policy denied {evaluation.action_type}: {'; '.join(evaluation.reasons)}",
+            requested_by=POLICY_ACTOR, reason=f"Policy denied {evaluation.action_type}: {'; '.join(evaluation.reasons)}",
         )
     else:
         action, created = await executor.request(
-            incident=incident, payment=payment, action_type=str(result.recommended_action), policy=evaluation,
-            requested_by=AI_ACTOR, reason=result.root_cause,
+            incident=incident, payment=payment, action_type=chosen, policy=evaluation,
+            requested_by=AI_ACTOR, reason=incident.root_cause,
         )
-
     if created:
         await audit.record(
             transaction_id=txn, incident_id=incident.id, event=AuditEvent.ACTION_CREATED, actor=ORCHESTRATOR_ACTOR,
@@ -272,23 +340,35 @@ async def run_investigation_stage(
             evidence={"idempotency_key": action.idempotency_key, "reasons": evaluation.reasons},
             result={"action_id": str(action.id)},
         )
-        await notify(session, incident=incident, transaction_id=txn,
-                     message=f"Approval needed: {action.action_type} {money(payment.amount, payment.currency)} for {txn}")
+        await _alert(session, incident, payment, "APPROVAL_REQUIRED",
+                     f"{action.action_type} needs approval: {'; '.join(evaluation.reasons)}")
+        _trace(session, incident, payment, "human_gate", "waiting for approval")
         await session.commit()
-        return None
+        return Decision("human", action.id)
     if action.status in (ActionStatus.APPROVED, ActionStatus.COMPLETED):
         incident.status = str(IncidentStatus.REMEDIATING)
         await session.commit()
-        return action.id
+        return Decision("act", action.id)
 
-    # Previously rejected / failed action for this transaction: never retry silently.
     incident.status = str(IncidentStatus.ESCALATED)
     await audit.record(
         transaction_id=txn, incident_id=incident.id, event=AuditEvent.INCIDENT_ESCALATED, actor=ORCHESTRATOR_ACTOR,
-        reason=f"Existing action {action.idempotency_key} is {action.status}; manual handling required",
+        reason=f"Existing action {action.idempotency_key} is {action.status}; human resolution required",
     )
+    await _alert(session, incident, payment, "INCIDENT_ESCALATED", f"Previous action {action.status}; needs a human")
+    _trace(session, incident, payment, "escalate", f"previous action {action.status}")
     await session.commit()
-    return None
+    return Decision("done")
+
+
+async def run_investigation_stage(
+    session: AsyncSession, incident_id: uuid.UUID, *, force_fallback: bool = False, delay: float = 0.0
+) -> uuid.UUID | None:
+    """Investigate + decide. Returns an action id ready to execute, if any."""
+    if not await investigate_step(session, incident_id, force_fallback=force_fallback, delay=delay):
+        return None
+    decision = await decide_step(session, incident_id, delay=delay)
+    return decision.action_id if decision.route == "act" else None
 
 
 # ---- ACT + VERIFY ----------------------------------------------------------------------------
@@ -303,9 +383,10 @@ class ActionStageResult:
     message: str
 
 
-async def run_action_stage(
+async def execute_step(
     session: AsyncSession, action_id: uuid.UUID, *, actor: str = EXECUTOR_ACTOR, delay: float = 0.0
-) -> ActionStageResult:
+) -> tuple[str, ActionStageResult | None]:
+    """Execute the authorised action. Returns ("verify", None) or ("done", result)."""
     audit = AuditService(session)
     outcome = await ActionExecutor(session).execute(action_id, actor=actor)
     action = outcome.action
@@ -320,8 +401,8 @@ async def run_action_stage(
                 IncidentStatus.RESOLVED if previous.get("status") == "PASSED" else IncidentStatus.ESCALATED
             )
         await session.commit()
-        return ActionStageResult(action, incident.status, previous or None, True,
-                                 f"Idempotent replay of {action.idempotency_key}: previous result returned")
+        return "done", ActionStageResult(action, incident.status, previous or None, True,
+                                         f"Idempotent replay of {action.idempotency_key}: previous result returned")
 
     if not outcome.success:
         incident.status = str(IncidentStatus.ESCALATED)
@@ -330,12 +411,24 @@ async def run_action_stage(
             transaction_id=txn, incident_id=incident.id, event=AuditEvent.INCIDENT_ESCALATED, actor=ORCHESTRATOR_ACTOR,
             reason=f"Action {action.action_type} failed: {outcome.error}",
         )
-        await notify(session, incident=incident, transaction_id=txn, message=f"Escalated: {action.action_type} failed")
+        await _alert(session, incident, payment, "ACTION_FAILED", f"{action.action_type} failed: {outcome.error}")
+        _trace(session, incident, payment, "execute", f"{action.action_type} FAILED")
         await session.commit()
-        return ActionStageResult(action, incident.status, None, False, f"{action.action_type} failed")
+        return "done", ActionStageResult(action, incident.status, None, False, f"{action.action_type} failed: {outcome.error}")
 
+    _trace(session, incident, payment, "execute", f"{action.action_type} executed")
     await session.commit()
     await _pause(delay)
+    return "verify", None
+
+
+async def verify_step(session: AsyncSession, action_id: uuid.UUID, *, delay: float = 0.0) -> ActionStageResult:
+    """Verify (re-reading PayPal where relevant), reconcile, then resolve or escalate."""
+    audit = AuditService(session)
+    action = await session.get(Action, action_id, populate_existing=True)
+    incident = await IncidentService(session).reload(action.incident_id)
+    payment = await PaymentService(session).reload(incident.payment_id)
+    txn = payment.transaction_id
 
     verification = await _verify_with_retry(session, action, payment, incident)
     action.result = to_jsonable({**(action.result or {}), "verification": verification.as_dict()})
@@ -348,25 +441,31 @@ async def run_action_stage(
             reason=action.reason or "Escalated for human investigation",
             result={"ticket": (action.result or {}).get("ticket")},
         )
-        await notify(session, incident=incident, transaction_id=txn,
-                     message=f"Escalated {incident.incident_number} ({incident.type}) to payments on-call")
-        message = "Incident escalated to on-call"
+        await _alert(session, incident, payment, "INCIDENT_ESCALATED",
+                     f"{incident.type} needs a human: {action.reason or 'policy escalation'}")
+        _trace(session, incident, payment, "escalate", "handed to on-call")
+        message = "Incident escalated to on-call: use Human resolution to close it"
     elif verification.passed:
         await audit.record(
             transaction_id=txn, incident_id=incident.id, event=AuditEvent.VERIFICATION_PASSED, actor=VERIFIER_ACTOR,
             reason=f"All {len(verification.checks)} post-action checks passed",
             evidence={"checks": verification.checks}, result={"snapshot": verification.snapshot},
         )
+        _trace(session, incident, payment, "verify", f"PASSED {len(verification.checks)} checks")
         await session.commit()
         await _pause(delay)
         await _post_remediation_reconcile(session, payment, incident)
         incident.status = str(IncidentStatus.RESOLVED)
         incident.resolved_at = utcnow()
+        incident.resolution = "HUMAN_APPROVED" if action.approved_by else "AUTOMATED"
         await audit.record(
             transaction_id=txn, incident_id=incident.id, event=AuditEvent.INCIDENT_RESOLVED, actor=ORCHESTRATOR_ACTOR,
             reason=f"{incident.incident_number} resolved via {action.action_type}",
-            result={"final_snapshot": verification.snapshot},
+            result={"final_snapshot": verification.snapshot, "resolution": incident.resolution},
         )
+        await _alert(session, incident, payment, "INCIDENT_RESOLVED",
+                     f"Resolved via {action.action_type} ({incident.resolution.lower().replace('_', ' ')})")
+        _trace(session, incident, payment, "reconcile", "all systems agree · RESOLVED")
         message = "Action executed and verified; incident resolved"
     else:
         await audit.record(
@@ -379,9 +478,21 @@ async def run_action_stage(
             transaction_id=txn, incident_id=incident.id, event=AuditEvent.INCIDENT_ESCALATED, actor=ORCHESTRATOR_ACTOR,
             reason="Verification failed after remediation",
         )
+        failed = ", ".join(c["name"] for c in verification.checks if not c["passed"])
+        await _alert(session, incident, payment, "INCIDENT_ESCALATED", f"Verification failed: {failed}")
+        _trace(session, incident, payment, "verify", f"FAILED ({failed})")
         message = "Verification failed; incident escalated"
     await session.commit()
     return ActionStageResult(action, incident.status, verification.as_dict(), False, message)
+
+
+async def run_action_stage(
+    session: AsyncSession, action_id: uuid.UUID, *, actor: str = EXECUTOR_ACTOR, delay: float = 0.0
+) -> ActionStageResult:
+    route, result = await execute_step(session, action_id, actor=actor, delay=delay)
+    if route == "done":
+        return result
+    return await verify_step(session, action_id, delay=delay)
 
 
 async def _post_remediation_reconcile(session: AsyncSession, payment: Payment, incident: Incident) -> None:
@@ -447,13 +558,9 @@ async def run_incident_pipeline(
     factory = factory or SessionLocal
     delay = settings.PIPELINE_STEP_DELAY_SECONDS if delay is None else delay
     try:
-        async with factory() as session:
-            action_id = await run_investigation_stage(session, incident_id, force_fallback=force_fallback, delay=delay)
-            if action_id is not None:
-                await _pause(delay)
-                await run_action_stage(session, action_id, delay=delay)
-            incident = await IncidentService(session).reload(incident_id)
-            return incident.status
+        from app.agents.incident_graph import run_incident_graph
+
+        return await run_incident_graph(incident_id, factory=factory, force_fallback=force_fallback, delay=delay)
     except Exception as exc:  # noqa: BLE001 - failed jobs must never disappear silently
         logger.exception("Incident pipeline failed for %s", incident_id)
         await record_pipeline_failure(factory, incident_id, f"pipeline: {exc}")
@@ -502,16 +609,7 @@ async def approve_action(session: AsyncSession, action_id: uuid.UUID, *, approve
         raise ConflictError(f"Action is {action.status}; only PENDING_APPROVAL actions can be approved")
 
     # Policy re-check at approval time: state may have changed since the recommendation.
-    ctx = PolicyContext.from_payment(
-        payment,
-        bank_amount=await _bank_amount(session, payment),
-        ledger_amount=await _ledger_amount(session, payment),
-        refund_completed=await _refund_completed(session, payment),
-        ai_confidence=incident.confidence,
-        ai_risk=incident.risk,
-        ai_requires_human=incident.requires_human,
-        human_approved=True,
-    )
+    ctx, _risk = await _policy_context(session, incident, payment, human_approved=True, action=action.action_type)
     evaluation = PolicyEngine().evaluate(action.action_type, ctx)
     await audit.record(
         transaction_id=payment.transaction_id, incident_id=incident.id, event=AuditEvent.POLICY_EVALUATED,
@@ -526,10 +624,12 @@ async def approve_action(session: AsyncSession, action_id: uuid.UUID, *, approve
         incident.status = str(IncidentStatus.ESCALATED)
         await audit.record(
             transaction_id=payment.transaction_id, incident_id=incident.id, event=AuditEvent.INCIDENT_ESCALATED,
-            actor=POLICY_ACTOR, reason="Policy re-check failed after approval; escalated",
+            actor=POLICY_ACTOR, reason=f"Policy re-check failed after approval: {'; '.join(evaluation.reasons)}",
         )
+        _trace(session, incident, payment, "human_gate", "approved but policy re-check denied")
         await session.commit()
-        return ActionStageResult(action, incident.status, None, False, "Policy re-check denied the action")
+        return ActionStageResult(action, incident.status, None, False,
+                                 f"Policy re-check denied the action: {'; '.join(evaluation.reasons)}")
 
     session.add(Approval(action_id=action.id, decision="APPROVED", approver=approver, note=note,
                          policy_recheck=to_jsonable(evaluation.model_dump())))
@@ -537,6 +637,10 @@ async def approve_action(session: AsyncSession, action_id: uuid.UUID, *, approve
     action.approved_by = approver
     action.policy = to_jsonable({**(action.policy or {}), "approval_recheck": evaluation.model_dump()})
     incident.status = str(IncidentStatus.REMEDIATING)
+    incident.acknowledged_by = incident.acknowledged_by or approver
+    incident.acknowledged_at = incident.acknowledged_at or utcnow()
+    await ack_incident_alerts(session, incident.id, by=approver)
+    _trace(session, incident, payment, "human_gate", f"approved by {approver}")
     await audit.record(
         transaction_id=payment.transaction_id, incident_id=incident.id, event=AuditEvent.ACTION_APPROVED,
         actor=approver, reason=note or f"{action.action_type} of {money(payment.amount, payment.currency)} approved by {approver}",

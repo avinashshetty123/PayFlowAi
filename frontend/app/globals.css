@@ -1,37 +1,112 @@
 @import "tailwindcss";
 
-/* PayFlow operations console — dark theme tokens */
+/* PayFlow operations console — merchant theme (Paytm for Business inspired), light + dark */
 :root {
-  --background: #0b0e12;
-  --panel: #12161c;
-  --panel-2: #181d25;
-  --border: #232a34;
-  --border-strong: #2f3845;
-  --foreground: #e6ebf1;
-  --muted: #8a94a3;
-  --subtle: #5d6776;
+  --background: #f3f6fb;
+  --panel: #ffffff;
+  --panel-2: #f6f9fd;
+  --border: #e2e8f1;
+  --border-strong: #cdd6e3;
+  --foreground: #0a1f44;
+  --muted: #53627c;
+  --subtle: #8593ab;
 
-  --primary: #5b8def;
-  --primary-foreground: #0b0e12;
+  /* brand: navy + sky blue */
+  --navy: #002e6e;
+  --navy-2: #00245a;
+  /* brand-coloured text/icons: navy on light, sky on dark */
+  --brand: #002e6e;
+  --sky: #00baf2;
+  --primary: #002e6e;
+  --primary-foreground: #ffffff;
 
-  /* status (reserved: always paired with icon + label) */
-  --good: #22c55e;
-  --warning: #fab219;
-  --serious: #ec835a;
-  --critical: #ef4444;
-  --info: #5b8def;
+  /* status (reserved: always paired with icon + label); text-safe on white */
+  --good: #0e8a4a;
+  --warning: #b45f06;
+  --serious: #c2410c;
+  --critical: #d12a2a;
+  --info: #0077c8;
 
-  /* chart categorical slots (validated for #12161c, dark mode) */
-  --series-1: #3987e5;
-  --series-2: #d95926;
-  --series-3: #199e70;
-  --series-4: #c98500;
-  --series-5: #d55181;
+  /* chart slots (validated, light mode on #ffffff) */
+  --series-1: #0077c8;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
   --series-6: #008300;
-  --series-7: #9085e9;
-  --series-8: #e66767;
-  --grid: #222831;
-  --axis: #5d6776;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --grid: #e9eef5;
+  --axis: #8593ab;
+}
+
+/* Dark theme: explicit choice, or system preference when the user has not picked one */
+:root[data-theme="dark"] {
+  --background: #0b1220;
+  --panel: #121b2e;
+  --panel-2: #172238;
+  --border: #233049;
+  --border-strong: #33425f;
+  --foreground: #e6edf7;
+  --muted: #a1b1c9;
+  --subtle: #7083a1;
+  --navy: #0c1f47;
+  --navy-2: #08183a;
+  --brand: #4cc9f5;
+  --sky: #00baf2;
+  --primary: #00baf2;
+  --primary-foreground: #002e6e;
+  --good: #34c77b;
+  --warning: #e9a23b;
+  --serious: #f27a45;
+  --critical: #f05252;
+  --info: #45aef5;
+  --series-1: #45aef5;
+  --series-2: #f07a48;
+  --series-3: #2fc28c;
+  --series-4: #f2b52a;
+  --series-5: #ef8db3;
+  --series-6: #4cbb4c;
+  --series-7: #9a8cf2;
+  --series-8: #f26462;
+  --grid: #1f2b42;
+  --axis: #7083a1;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --background: #0b1220;
+  --panel: #121b2e;
+  --panel-2: #172238;
+  --border: #233049;
+  --border-strong: #33425f;
+  --foreground: #e6edf7;
+  --muted: #a1b1c9;
+  --subtle: #7083a1;
+  --navy: #0c1f47;
+  --navy-2: #08183a;
+  --brand: #4cc9f5;
+  --sky: #00baf2;
+  --primary: #00baf2;
+  --primary-foreground: #002e6e;
+  --good: #34c77b;
+  --warning: #e9a23b;
+  --serious: #f27a45;
+  --critical: #f05252;
+  --info: #45aef5;
+  --series-1: #45aef5;
+  --series-2: #f07a48;
+  --series-3: #2fc28c;
+  --series-4: #f2b52a;
+  --series-5: #ef8db3;
+  --series-6: #4cbb4c;
+  --series-7: #9a8cf2;
+  --series-8: #f26462;
+  --grid: #1f2b42;
+  --axis: #7083a1;
+  color-scheme: dark;
+  }
 }
 
 @theme inline {
@@ -43,6 +118,10 @@
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-subtle: var(--subtle);
+  --color-navy: var(--navy);
+  --color-navy-2: var(--navy-2);
+  --color-brand: var(--brand);
+  --color-sky: var(--sky);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-good: var(--good);
@@ -55,34 +134,51 @@
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] .card-shadow {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 body {
   background: var(--background);
+  transition: background-color 0.15s ease, color 0.15s ease;
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
 
 ::selection {
-  background: rgba(91, 141, 239, 0.35);
+  background: rgba(0, 186, 242, 0.25);
 }
 
 .tabular {
   font-variant-numeric: tabular-nums;
 }
 
-/* thin scrollbars for tables / panels */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
 }
 
+.card-shadow {
+  box-shadow: 0 1px 2px rgba(10, 31, 68, 0.04), 0 1px 1px rgba(10, 31, 68, 0.02);
+}
+
 @keyframes pulse-ring {
-  0% { box-shadow: 0 0 0 0 rgba(91, 141, 239, 0.45); }
-  100% { box-shadow: 0 0 0 8px rgba(91, 141, 239, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(0, 186, 242, 0.5); }
+  100% { box-shadow: 0 0 0 8px rgba(0, 186, 242, 0); }
 }
 
 .pulse-ring {
   animation: pulse-ring 1.4s ease-out infinite;
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.slide-in {
+  animation: slide-in 0.18s ease-out;
 }

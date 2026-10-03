@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { ErrorBanner, PageHeader } from "@/components/app-shell";
+import { ReconInsights } from "@/components/recon-insights";
 import { useLiveRefresh } from "@/components/event-stream";
 import { StatusBadge, ToneIcon, toneFor } from "@/components/status";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ function Cell({ value }: { value: string }) {
     <span
       className={cn(
         "inline-flex items-center gap-1 font-mono text-[11px]",
-        tone === "good" ? "text-good" : tone === "critical" ? "text-[#f87171]" : tone === "warning" ? "text-warning" : "text-muted",
+        tone === "good" ? "text-good" : tone === "critical" ? "text-critical" : tone === "warning" ? "text-warning" : "text-muted",
       )}
     >
       <ToneIcon tone={tone} />
@@ -70,12 +71,14 @@ export default function ReconciliationPage() {
       {error && <ErrorBanner message={error} />}
       {message && <p className="mb-3 text-xs text-muted">{message}</p>}
 
+      <ReconInsights />
+
       {s && (
         <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
           {[
             { label: "Checked", value: s.checked },
             { label: "Consistent", value: s.consistent, accent: "text-good" },
-            { label: "Mismatched now", value: s.mismatched, accent: s.mismatched ? "text-[#f87171]" : "" },
+            { label: "Mismatched now", value: s.mismatched, accent: s.mismatched ? "text-critical" : "" },
             { label: "Remediated", value: s.remediated, accent: "text-good" },
           ].map((stat) => (
             <Card key={stat.label} className="px-4 py-3">

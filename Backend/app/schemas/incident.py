@@ -32,6 +32,9 @@ class IncidentSummary(BaseModel):
     provider_status: str | None = None
     failure_source: str | None = None
     injected_scenario: str | None = None
+    risk_score: int | None = None
+    resolution: str | None = None
+    acknowledged_by: str | None = None
 
 
 class IncidentListResponse(BaseModel):
@@ -48,6 +51,10 @@ class IncidentDetail(IncidentSummary):
     payment: PaymentOut
     investigation: InvestigationOut | None
     actions: list[ActionOut]
+    risk_factors: dict | None = None
+    acknowledged_at: datetime | None = None
+    resolution_note: str | None = None
+    agent_trace: list = []
     failure_injections: list[FailureInjectionOut] = []
     webhook_events: list[WebhookEventOut] = []
     provider_transactions: list[ProviderTransactionOut] = []

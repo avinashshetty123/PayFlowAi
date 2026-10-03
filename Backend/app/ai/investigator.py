@@ -18,7 +18,8 @@ from app.ai.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.core.config import settings
 from app.core.enums import ActionType, IncidentType, Risk
 from app.models import Incident, Payment
-from app.schemas.investigation import AIInvestigationResult
+from app.schemas.investigation import AIInvestigationResult, ImpactAssessment
+from app.utils.serialization import money
 from app.services.payment_service import snapshot
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,84 @@ _PLAYBOOK: dict[str, tuple[str, ActionType, float, tuple[str, ...], str, bool]] 
 }
 
 
+# incident type -> (contributing factors, remediation plan, preventive measures, customer impact)
+_DETAIL: dict[str, tuple[list[str], list[str], list[str], str]] = {
+    IncidentType.LEDGER_MISMATCH: (
+        ["Downstream write executed after the provider capture without a transactional outbox",
+         "No automatic retry on the ledger/merchant write path"],
+        ["Re-read the authoritative capture amount from the provider", "Post the missing capture entry to the ledger",
+         "Mark the merchant order paid", "Verify ledger amount equals the provider capture amount",
+         "Re-run five-way reconciliation and close the break"],
+        ["Write ledger entries through a transactional outbox", "Alert when ledger lag exceeds 60 seconds"],
+        "Customer was charged but the order may not show as paid until the ledger is reconciled.",
+    ),
+    IncidentType.WEBHOOK_DELAY: (
+        ["Webhook intake slow or unavailable", "Order/ledger updates depend solely on webhook delivery"],
+        ["Pull the order status from the provider API", "Apply the captured status to merchant and ledger",
+         "Verify webhook state is RECEIVED or RESYNCED", "Reconcile all systems"],
+        ["Poll provider status when a webhook exceeds its SLA", "Scale webhook intake horizontally"],
+        "Customer paid; order confirmation is delayed until the webhook is processed.",
+    ),
+    IncidentType.WEBHOOK_LOST: (
+        ["Webhook dropped before verification or processing", "No reconciliation poll after the grace period"],
+        ["Pull the authoritative order status from the provider API", "Mark the webhook as re-synced",
+         "Verify capture status and downstream state", "Reconcile all systems"],
+        ["Persist raw webhooks before acknowledging", "Run a scheduled status poll for unconfirmed captures"],
+        "Customer paid; PayFlow had no confirmation event until it re-synced with the provider.",
+    ),
+    IncidentType.SETTLEMENT_MISMATCH: (
+        ["Provider settled a different amount than PayFlow requested",
+         "Possible idempotency-key replay or unexpected fee deduction"],
+        ["Freeze automated ledger changes for this payment", "Compare requested vs provider-settled amounts",
+         "Escalate to finance with provider debug ids", "Resolve manually once the correct amount is confirmed"],
+        ["Make provider idempotency keys globally unique", "Reject provider responses whose amount differs from the request"],
+        "Customer may have been charged an amount different from the order total.",
+    ),
+    IncidentType.DUPLICATE_PAYMENT: (
+        ["Client retried checkout after a timeout", "Checkout API accepted a second capture for the same order"],
+        ["Identify the original and duplicate captures", "Refund the duplicate capture only",
+         "Verify the refund with the provider", "Reconcile the order"],
+        ["Enforce idempotency keys on checkout", "Disable the pay button after the first submit"],
+        "Customer was charged twice for the same order.",
+    ),
+    IncidentType.REFUND_FAILURE: (
+        ["Refund call failed at the provider", "No automatic refund retry"],
+        ["Check refund eligibility", "Retry the refund with an idempotency key", "Verify the refund status with the provider",
+         "Close the merchant refund request"],
+        ["Retry transient refund failures with backoff", "Alert on refunds pending > 15 minutes"],
+        "Customer is still owed money after a failed refund.",
+    ),
+    IncidentType.REFUND_REQUESTED: (
+        ["Merchant cancelled the order after capture"],
+        ["Check refund eligibility and amount limits", "Obtain approval if above the auto-approve limit",
+         "Execute the refund via the provider API", "Verify the refund and reconcile"],
+        ["Offer cancellation before capture where possible"],
+        "Customer is waiting for a refund of a cancelled order.",
+    ),
+    IncidentType.GATEWAY_TIMEOUT: (
+        ["Acquirer did not respond within the timeout", "No funds reached the bank"],
+        ["Confirm no capture exists at the provider", "Mark the payment failed and release the order",
+         "Verify no settlement exists"],
+        ["Route to a secondary acquirer on repeated timeouts"],
+        "Customer saw a pending payment; no money was taken.",
+    ),
+    IncidentType.PROVIDER_DECLINED: (
+        ["The provider declined the capture", "PayFlow order remained open after the decline"],
+        ["Confirm the capture is not completed at the provider", "Mark the payment failed and release the order",
+         "Verify with the provider API"],
+        ["Close orders automatically on provider decline webhooks"],
+        "Customer's payment was declined; the order should be released so they can retry.",
+    ),
+    IncidentType.UNKNOWN_STATE: (
+        ["Provider status ambiguous", "Settlement evidence conflicts with provider status"],
+        ["Freeze automation for this payment", "Escalate to payments on-call with provider debug ids",
+         "Confirm the outcome with provider support", "Resolve manually"],
+        ["Add provider status polling with exponential backoff"],
+        "Customer's payment outcome is unknown; they may have been charged.",
+    ),
+}
+
+
 SYSTEM_LABELS = {"gateway": "Gateway", "bank": "Bank", "merchant": "Merchant", "ledger": "Ledger", "webhook": "Webhook"}
 PAYPAL_LABELS = {"gateway": "PayPal capture", "bank": "PayPal settlement", "merchant": "Merchant order",
                  "ledger": "Ledger", "webhook": "Webhook"}
@@ -133,15 +212,35 @@ def deterministic_investigation(
             root = "Ledger synchronization failure: PayFlow ledger write failed after a successful PayPal capture"
     if top:
         evidence.append(f"Historical match: {top['title']} ({round(float(top['similarity']) * 100)}%)")
+    factors, plan, prevention, customer_impact = _DETAIL.get(
+        incident_type, (["Unclassified mismatch"], ["Escalate to payments on-call"], ["Add a playbook"], "Unknown"))
+    if injected_scenario:
+        factors = [f"Deliberate PayFlow demo failure injection: {injected_scenario}", *factors]
+    systemic = sum(1 for m in matches if m.get("incident_type") == incident_type and float(m.get("similarity", 0)) > 0.8)
     return AIInvestigationResult(
         incident_type=incident_type,
         root_cause=root,
         confidence=round(min(confidence, 0.99), 2),
+        confidence_rationale=(
+            f"Playbook confidence {base:.2f} for {incident_type}"
+            + (f", raised by a {round(float(top['similarity']) * 100)}% historical match" if top else "")
+            + "; deterministic rules, no model call."
+        ),
         recommended_action=action,
         risk=risk,
         requires_human=requires_human,
         evidence=evidence,
         summary=summary,
+        impact=ImpactAssessment(
+            customer_impact=customer_impact,
+            financial_exposure=f"{money(amount, currency)} affected",
+            blast_radius=("Single payment; pattern seen before in historical incidents" if systemic
+                          else "Single payment; no systemic pattern detected"),
+            urgency="IMMEDIATE" if risk == Risk.HIGH else ("HIGH" if action != ActionType.ESCALATE else "NORMAL"),
+        ),
+        contributing_factors=factors,
+        remediation_plan=plan,
+        preventive_measures=prevention,
     )
 
 
@@ -178,6 +277,8 @@ class InvestigatorService:
             "note": "Injected failures are deliberate PayFlow demo failures, never PayPal failures.",
         }
         bundle["webhooks"] = await tools.get_webhook_events(self.session, payment)
+        bundle["customer_history"] = await tools.get_customer_history(self.session, payment)
+        bundle["risk_score"] = (incident.risk_factors or {}).get("score_breakdown") if hasattr(incident, "risk_factors") else None
         bundle["historical_matches"] = [
             {k: m[k] for k in ("title", "incident_type", "similarity", "root_cause", "resolution")} for m in matches
         ]

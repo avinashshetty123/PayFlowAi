@@ -108,7 +108,7 @@ async def test_create_order_records_provider_state(paypal):
     payment = await _payment("TXN92831")
     assert (payment.provider, payment.currency, payment.provider_order_id) == ("PAYPAL_SANDBOX", "USD", created.order_id)
     assert payment.overall_status == "CREATED" and not payment.is_simulated
-    assert paypal.headers_for("POST", r"/v2/checkout/orders$")[0]["paypal-request-id"] == "paypal:order:TXN92831"
+    assert paypal.headers_for("POST", r"/v2/checkout/orders$")[0]["paypal-request-id"].startswith("paypal:order:TXN92831:")
     assert "PAYMENT_APPROVAL_STARTED" in await _events("TXN92831")
 
 

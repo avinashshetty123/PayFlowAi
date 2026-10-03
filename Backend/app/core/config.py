@@ -1,4 +1,6 @@
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator
@@ -6,11 +8,30 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PAYPAL_SANDBOX_API = "https://api-m.sandbox.paypal.com"
 
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+
+def detect_platform() -> str:
+    """Where the API is running. Hosted platforms inject their own env vars; local dev has none."""
+    if os.environ.get("RENDER"):
+        return "render"
+    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"):
+        return "railway"
+    if os.environ.get("VERCEL"):
+        return "vercel"
+    return "local"
+
+
+PLATFORM = detect_platform()
+# Locally, .env.local (git-ignored, never deployed) overrides .env. On a hosted platform only the
+# platform's environment variables (and an optional .env) are used.
+ENV_FILES = (BACKEND_DIR / ".env",) if PLATFORM != "local" else (BACKEND_DIR / ".env", BACKEND_DIR / ".env.local")
+
 
 class Settings(BaseSettings):
     """Application configuration, loaded from environment variables / .env."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=ENV_FILES, env_file_encoding="utf-8", extra="ignore")
 
     APP_NAME: str = "PayFlow AI"
     ENVIRONMENT: str = "development"
@@ -44,7 +65,26 @@ class Settings(BaseSettings):
     WEBHOOK_GRACE_SECONDS: float = Field(default=30, ge=5, le=3600)
     RECONCILIATION_DELAY_SECONDS: float = Field(default=8, ge=1, le=600)
 
+    # ---- Operator alerting (all optional; unconfigured channels are skipped) ----
+    # WhatsApp via Meta Cloud API (WhatsApp Business Platform)
+    WHATSAPP_ACCESS_TOKEN: str | None = None
+    WHATSAPP_PHONE_NUMBER_ID: str | None = None
+    ALERT_WHATSAPP_TO: str | None = None  # comma-separated, country code included, e.g. 919876543210
+    TELEGRAM_BOT_TOKEN: str | None = None
+    TELEGRAM_CHAT_ID: str | None = None
+    NTFY_TOPIC: str | None = None  # push to any phone via the free ntfy app
+    NTFY_SERVER: str = "https://ntfy.sh"
+    SLACK_WEBHOOK_URL: str | None = None
+    ALERT_WEBHOOK_URL: str | None = None
+    ALERT_ESCALATION_MINUTES: float = Field(default=5, ge=0.5, le=240)
+    # Background pump: delivers alert outbox, escalates unacknowledged alerts, seals the audit chain.
+    BACKGROUND_PUMP_ENABLED: bool = True
+
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    # Vercel preview + production deployments of the console.
+    CORS_ORIGIN_REGEX: str = r"https://[a-z0-9-]+\.vercel\.app"
+    # Public URL of this API (Render sets RENDER_EXTERNAL_URL automatically).
+    PUBLIC_API_URL: str | None = None
 
     # How incident pipelines are dispatched:
     #   auto   -> Celery if a worker answers a ping, otherwise in-process background task
@@ -59,6 +99,9 @@ class Settings(BaseSettings):
     REFUND_AUTO_APPROVE_LIMIT: float = 5000.0  # INR (historical data)
     REFUND_AUTO_APPROVE_LIMIT_USD: float = 25.0  # PayPal sandbox payments
     MIN_AUTOMATION_CONFIDENCE: float = 0.75
+    # Automation circuit breaker: max automated financial actions per rolling window.
+    AUTOMATION_RATE_LIMIT: int = 20
+    AUTOMATION_WINDOW_MINUTES: int = 10
     # Display-only conversion for the UI ("≈ ₹4,200 demo equivalent"). PayPal processes USD.
     USD_INR_DEMO_RATE: float = 84.0
 
@@ -70,6 +113,27 @@ class Settings(BaseSettings):
         if value.startswith("postgresql://"):
             value = "postgresql+asyncpg://" + value[len("postgresql://") :]
         return value
+
+    @property
+    def platform(self) -> str:
+        return PLATFORM
+
+    @property
+    def public_api_url(self) -> str:
+        return (self.PUBLIC_API_URL or os.environ.get("RENDER_EXTERNAL_URL")
+                or os.environ.get("RAILWAY_PUBLIC_DOMAIN") and f"https://{os.environ['RAILWAY_PUBLIC_DOMAIN']}"
+                or "http://localhost:8000")
+
+    def origin_allowed(self, origin: str | None) -> bool:
+        import re
+
+        if not origin:
+            return False
+        return origin in self.cors_origins or bool(re.fullmatch(self.CORS_ORIGIN_REGEX, origin))
+
+    def frontend_base(self, origin: str | None = None) -> str:
+        """Return URL base for PayPal redirects: the calling console if trusted, else FRONTEND_URL."""
+        return origin.rstrip("/") if self.origin_allowed(origin) else self.FRONTEND_URL.rstrip("/")
 
     @property
     def cors_origins(self) -> list[str]:

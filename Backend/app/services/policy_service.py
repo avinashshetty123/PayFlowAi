@@ -5,6 +5,8 @@ high risk, requires_human) can only make a decision *stricter* — they can
 never turn a DENY or HUMAN_APPROVAL_REQUIRED into ALLOW.
 """
 
+import hashlib
+import json
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -12,7 +14,40 @@ from app.core.config import settings
 from app.core.enums import ActionType, BankStatus as B, GatewayStatus as G, LedgerStatus as L, PolicyDecision, Risk, WebhookStatus as W
 from app.models import Payment
 from app.schemas.action import PolicyCheck, PolicyEvaluation
+from app.services.playbook import allowed_actions, is_compatible
+from app.services.risk_service import HUMAN_THRESHOLD
 from app.utils.serialization import money
+
+# Policy-as-code catalogue (shown in the console and hashed into every decision).
+RULES: list[dict] = [
+    {"id": "PB-001", "name": "Playbook compatibility", "effect": "DENY",
+     "description": "An action must be in the remediation playbook for the detected incident type; otherwise the AI "
+                    "recommendation is overridden by the playbook action."},
+    {"id": "PRE-RECON", "name": "Reconcile preconditions", "effect": "DENY",
+     "description": "RECONCILE_LEDGER only when the provider captured, funds settled, settled amount equals captured "
+                    "amount, and ledger/merchant are out of sync."},
+    {"id": "PRE-WEBHOOK", "name": "Webhook re-sync preconditions", "effect": "DENY",
+     "description": "RETRY_WEBHOOK only for captured payments whose webhook is not RECEIVED."},
+    {"id": "PRE-REFUND", "name": "Refund preconditions", "effect": "DENY",
+     "description": "REFUND only for captured, settled, not-yet-refunded payments with a provider capture reference."},
+    {"id": "PRE-FAIL", "name": "Mark-failed preconditions", "effect": "DENY",
+     "description": "MARK_PAYMENT_FAILED only when no funds settled and the provider did not capture."},
+    {"id": "LIM-REFUND", "name": "Refund auto-approve limit", "effect": "HUMAN_APPROVAL_REQUIRED",
+     "description": "Refunds above the per-currency limit (USD 25 / INR 5000) need a human."},
+    {"id": "AI-CONF", "name": "AI confidence floor", "effect": "HUMAN_APPROVAL_REQUIRED",
+     "description": "Financial actions need AI confidence >= MIN_AUTOMATION_CONFIDENCE."},
+    {"id": "AI-FLAG", "name": "AI escalation flags", "effect": "HUMAN_APPROVAL_REQUIRED",
+     "description": "AI risk HIGH or requiresHuman makes a decision stricter. The AI can never loosen a decision."},
+    {"id": "RISK-SCORE", "name": "Risk score threshold", "effect": "HUMAN_APPROVAL_REQUIRED",
+     "description": f"Deterministic risk score >= {HUMAN_THRESHOLD} requires a human."},
+    {"id": "CTL-KILL", "name": "Automation kill switch", "effect": "HUMAN_APPROVAL_REQUIRED",
+     "description": "When engaged by an operator, every financial action needs a human."},
+    {"id": "CTL-BREAKER", "name": "Automation circuit breaker", "effect": "HUMAN_APPROVAL_REQUIRED",
+     "description": "Caps automated financial actions per rolling window to contain runaway automation."},
+    {"id": "HUMAN-OK", "name": "Human approval", "effect": "ALLOW",
+     "description": "A recorded human approval satisfies approval requirements, never failed preconditions."},
+]
+POLICY_VERSION = "v2-" + hashlib.sha256(json.dumps(RULES, sort_keys=True).encode()).hexdigest()[:10]
 
 DECISION_LABELS = {
     PolicyDecision.ALLOW: "AUTOMATIC ACTION ALLOWED",
@@ -44,6 +79,10 @@ class PolicyContext:
     ai_risk: str | None = None
     ai_requires_human: bool = False
     human_approved: bool = False
+    incident_type: str | None = None
+    risk_score: int | None = None
+    kill_switch: bool = False
+    automation_tripped: bool = False
 
     @classmethod
     def from_payment(cls, payment: Payment, **kwargs) -> "PolicyContext":
@@ -83,28 +122,70 @@ class PolicyEngine:
             )
 
         checks, decision, reasons = self._preconditions(action, ctx)
+        fired: list[str] = []
 
+        if ctx.incident_type:
+            compatible = is_compatible(ctx.incident_type, action)
+            checks.insert(0, _check(
+                "playbook compatibility", compatible,
+                f"{action} for {ctx.incident_type} (allowed: {', '.join(a.value for a in allowed_actions(ctx.incident_type))})",
+            ))
+            if not compatible:
+                decision = PolicyDecision.DENY
+                fired.append("PB-001")
+                reasons.insert(0, f"{action} is not a playbook action for {ctx.incident_type}")
+        if decision == PolicyDecision.DENY and "PB-001" not in fired:
+            fired.append({"RECONCILE_LEDGER": "PRE-RECON", "RETRY_WEBHOOK": "PRE-WEBHOOK", "REFUND": "PRE-REFUND",
+                          "MARK_PAYMENT_FAILED": "PRE-FAIL"}.get(action, "PB-001"))
+        if decision == PolicyDecision.HUMAN_APPROVAL_REQUIRED and action == ActionType.REFUND:
+            fired.append("LIM-REFUND")
+
+        if decision == PolicyDecision.ALLOW and action in FINANCIAL_ACTIONS and not ctx.human_approved:
+            if ctx.risk_score is not None:
+                over = ctx.risk_score >= HUMAN_THRESHOLD
+                checks.append(_check("risk score", not over, f"{ctx.risk_score} vs threshold {HUMAN_THRESHOLD}"))
+                if over:
+                    decision = PolicyDecision.HUMAN_APPROVAL_REQUIRED
+                    fired.append("RISK-SCORE")
+                    reasons.append(f"Risk score {ctx.risk_score} >= {HUMAN_THRESHOLD}")
+            if ctx.kill_switch:
+                checks.append(_check("automation kill switch", False, "engaged by operator"))
+                decision = PolicyDecision.HUMAN_APPROVAL_REQUIRED
+                fired.append("CTL-KILL")
+                reasons.append("Automation kill switch engaged")
+            if ctx.automation_tripped:
+                checks.append(_check("automation circuit breaker", False, "automated action budget exhausted"))
+                decision = PolicyDecision.HUMAN_APPROVAL_REQUIRED
+                fired.append("CTL-BREAKER")
+                reasons.append("Automation circuit breaker tripped")
         if decision == PolicyDecision.ALLOW and action in FINANCIAL_ACTIONS and not ctx.human_approved:
             if ctx.ai_confidence is not None and ctx.ai_confidence < self.min_confidence:
                 checks.append(_check("ai_confidence", False, f"{ctx.ai_confidence:.2f} < {self.min_confidence:.2f}"))
                 decision = PolicyDecision.HUMAN_APPROVAL_REQUIRED
+                fired.append("AI-CONF")
                 reasons.append("AI confidence below automation threshold")
             elif ctx.ai_confidence is not None:
                 checks.append(_check("ai_confidence", True, f"{ctx.ai_confidence:.2f} >= {self.min_confidence:.2f}"))
             if ctx.ai_requires_human:
                 decision = PolicyDecision.HUMAN_APPROVAL_REQUIRED
+                fired.append("AI-FLAG")
                 reasons.append("Investigator flagged incident for human review")
             if ctx.ai_risk == Risk.HIGH:
                 decision = PolicyDecision.HUMAN_APPROVAL_REQUIRED
+                fired.append("AI-FLAG")
                 reasons.append("Investigator rated risk HIGH")
 
         if ctx.human_approved and decision == PolicyDecision.HUMAN_APPROVAL_REQUIRED:
             decision = PolicyDecision.ALLOW
+            fired.append("HUMAN-OK")
             reasons.append("Human approval recorded")
 
         if not reasons:
             reasons.append("All policy preconditions satisfied")
-        return self._result(action, decision, reasons, checks)
+        result = self._result(action, decision, reasons, checks)
+        result.fired_rules = list(dict.fromkeys(fired))
+        result.risk_score = ctx.risk_score
+        return result
 
     def _preconditions(self, action: ActionType, ctx: PolicyContext) -> tuple[list[PolicyCheck], PolicyDecision, list[str]]:
         checks: list[PolicyCheck] = []
@@ -175,5 +256,6 @@ class PolicyEngine:
     @staticmethod
     def _result(action: str, decision: PolicyDecision, reasons: list[str], checks: list[PolicyCheck]) -> PolicyEvaluation:
         return PolicyEvaluation(
-            action_type=str(action), decision=decision, label=DECISION_LABELS[decision], reasons=reasons, checks=checks
+            action_type=str(action), decision=decision, label=DECISION_LABELS[decision], reasons=reasons, checks=checks,
+            policy_version=POLICY_VERSION,
         )

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,5 +35,16 @@ class Incident(UUIDPkMixin, CreatedAtMixin, Base):
     # PAYPAL_PROVIDER_FAILURE vs PAYFLOW_INFRASTRUCTURE_FAILURE (injected) vs HISTORICAL
     failure_source: Mapped[str | None] = mapped_column(String(48))
     injected_scenario: Mapped[str | None] = mapped_column(String(48))
+
+    # Deterministic risk score (0-100) with factor breakdown, computed at decision time.
+    risk_score: Mapped[int | None] = mapped_column(Integer)
+    risk_factors: Mapped[dict | None] = mapped_column(JSONB)
+    # Human handling: acknowledgement and how the incident was closed.
+    acknowledged_by: Mapped[str | None] = mapped_column(String(64))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution: Mapped[str | None] = mapped_column(String(32))  # AUTOMATED | HUMAN_APPROVED | MANUAL | ACCEPTED_RISK | FALSE_POSITIVE
+    resolution_note: Mapped[str | None] = mapped_column(Text)
+    # LangGraph agent path taken for this incident: [{node, at, outcome}]
+    agent_trace: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

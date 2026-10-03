@@ -17,6 +17,7 @@ const FILTERS = [
   { key: "AWAITING_APPROVAL", label: "Awaiting approval" },
   { key: "ESCALATED", label: "Escalated" },
   { key: "RESOLVED", label: "Resolved" },
+  { key: "CLOSED", label: "Closed" },
 ] as const;
 
 export default function IncidentsPage() {

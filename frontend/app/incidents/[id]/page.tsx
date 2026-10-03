@@ -7,9 +7,11 @@ import {
   CheckCircle2,
   CircleDashed,
   FlaskConical,
+  Hand,
   History,
   KeyRound,
   Play,
+  RotateCcw,
   Scale,
   ShieldCheck,
   UserCheck,
@@ -19,15 +21,18 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 
+import { AgentGraph } from "@/components/agent-graph";
 import { ErrorBanner } from "@/components/app-shell";
 import { ApprovalActions } from "@/components/approval-actions";
 import { useLiveRefresh } from "@/components/event-stream";
 import { LifecycleStepper } from "@/components/lifecycle";
+import { RiskMeter } from "@/components/risk-meter";
 import { SeverityBadge, StatusBadge, ToneIcon, toneFor } from "@/components/status";
 import { ChangeList } from "@/components/system-grid";
 import { Timeline } from "@/components/timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -59,7 +64,7 @@ function StateText({ value }: { value: string | null | undefined }) {
   const tone = toneFor(value);
   return (
     <span className={cn("inline-flex items-center gap-1 font-mono text-[12px] font-semibold",
-      tone === "good" ? "text-good" : tone === "critical" ? "text-[#f87171]" : tone === "warning" ? "text-warning" : "text-muted")}>
+      tone === "good" ? "text-good" : tone === "critical" ? "text-critical" : tone === "warning" ? "text-warning" : "text-muted")}>
       <ToneIcon tone={tone} /> {value ?? "—"}
     </span>
   );
@@ -85,7 +90,7 @@ function Distinction({ incident }: { incident: IncidentDetail }) {
         <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-subtle">
           {paypal ? "PayPal result" : "Provider result"}
         </div>
-        <div className={cn("mt-1 flex items-center gap-1.5 font-mono text-lg font-semibold", providerOk ? "text-good" : "text-[#f87171]")}>
+        <div className={cn("mt-1 flex items-center gap-1.5 font-mono text-lg font-semibold", providerOk ? "text-good" : "text-critical")}>
           {providerOk ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />} {providerStatus}
         </div>
         <div className="mt-0.5 text-[11px] text-muted">
@@ -96,7 +101,7 @@ function Distinction({ incident }: { incident: IncidentDetail }) {
       <div className={cn("rounded-lg border px-4 py-3",
         incident.injected_scenario ? "border-warning/50 bg-warning/5" : "border-critical/40 bg-critical/5")}>
         <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-subtle">PayFlow detected</div>
-        <div className="mt-1 flex items-center gap-1.5 font-mono text-lg font-semibold text-[#f87171]">
+        <div className="mt-1 flex items-center gap-1.5 font-mono text-lg font-semibold text-critical">
           <XCircle className="size-4" /> {incident.injected_scenario ?? incident.type}
         </div>
         <div className="mt-0.5 text-[11px] text-muted">
@@ -225,6 +230,53 @@ function AIPanel({ incident }: { incident: IncidentDetail }) {
             ))}
           </ul>
         </Field>
+        {rec.confidenceRationale && (
+          <Field label="Why this confidence"><p className="text-xs text-muted">{rec.confidenceRationale}</p></Field>
+        )}
+        {rec.impact && (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {[
+              ["Customer impact", rec.impact.customerImpact],
+              ["Financial exposure", rec.impact.financialExposure],
+              ["Blast radius", rec.impact.blastRadius],
+              ["Urgency", rec.impact.urgency],
+            ].filter(([, v]) => v).map(([label, value]) => (
+              <div key={label} className="rounded-lg border border-border bg-panel-2 px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.1em] text-subtle">{label}</div>
+                <div className="mt-0.5 text-xs text-foreground">{value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!!rec.remediationPlan?.length && (
+          <Field label="Remediation plan">
+            <ol className="space-y-1.5">
+              {rec.remediationPlan.map((step, i) => (
+                <li key={step} className="flex gap-2 text-xs text-foreground">
+                  <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-navy text-[10px] font-bold text-white">{i + 1}</span>
+                  {step}
+                </li>
+              ))}
+            </ol>
+          </Field>
+        )}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {!!rec.contributingFactors?.length && (
+            <Field label="Contributing factors">
+              <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted">{rec.contributingFactors.map((f) => <li key={f}>{f}</li>)}</ul>
+            </Field>
+          )}
+          {!!rec.preventiveMeasures?.length && (
+            <Field label="Prevent recurrence">
+              <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted">{rec.preventiveMeasures.map((f) => <li key={f}>{f}</li>)}</ul>
+            </Field>
+          )}
+        </div>
+        {!!rec.anomalies?.length && (
+          <Field label="Anomalies spotted">
+            <ul className="space-y-0.5 text-xs text-warning">{rec.anomalies.map((a) => <li key={a}>⚠ {a}</li>)}</ul>
+          </Field>
+        )}
         <p className="border-t border-border pt-3 text-[11px] leading-relaxed text-subtle">
           The AI only recommends; it cannot move money or change state. {inv.evidence.tool_calls?.length ?? 0} read-only
           tools{inv.latency_ms !== null && ` · ${inv.latency_ms}ms`}. Stored: summary, evidence and decision only. No
@@ -298,6 +350,20 @@ function PolicyPanel({ incident, action }: { incident: IncidentDetail; action: A
           ))}
         </ul>
         {!!policy.reasons?.length && <Field label="Reason"><p className="text-xs text-muted">{policy.reasons.join(" · ")}</p></Field>}
+        {action.policy.overridden_ai_action && (
+          <p className="rounded-lg border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning">
+            Guardrail PB-001: the AI recommended <b className="font-mono">{action.policy.overridden_ai_action}</b>, which is not a
+            valid fix for {incident.type}. Policy replaced it with the playbook action <b className="font-mono">{action.action_type}</b>.
+          </p>
+        )}
+        {(!!action.policy.fired_rules?.length || action.policy.policy_version) && (
+          <div className="flex flex-wrap items-center gap-1">
+            {action.policy.fired_rules?.map((r) => (
+              <span key={r} className="rounded bg-navy px-1.5 py-px font-mono text-[10px] text-white">{r}</span>
+            ))}
+            {action.policy.policy_version && <span className="ml-auto font-mono text-[10px] text-subtle">policy {action.policy.policy_version}</span>}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -331,7 +397,7 @@ function ActionPanel({ action, onDecided }: { action: Action; onDecided: () => v
           )}
           {action.result?.summary && <p className="text-sm text-foreground">{action.result.summary}</p>}
           {action.result?.changes && <Field label="State changes"><ChangeList changes={action.result.changes} /></Field>}
-          {action.result?.error && <p className="text-sm text-[#f87171]">{action.result.error}</p>}
+          {action.result?.error && <p className="text-sm text-critical">{action.result.error}</p>}
         </CardContent>
       </Card>
       {verification && (
@@ -345,7 +411,7 @@ function ActionPanel({ action, onDecided }: { action: Action; onDecided: () => v
               {verification.checks.map((c) => (
                 <li key={c.name} className="flex items-center gap-2 font-mono text-xs">
                   {c.passed ? <CheckCircle2 className="size-3.5 text-good" /> : <XCircle className="size-3.5 text-critical" />}
-                  <span className={cn(c.name.startsWith("PayPal") ? "text-[#8fb0f5]" : "text-muted")}>{c.name}</span>
+                  <span className={cn(c.name.startsWith("PayPal") ? "text-info" : "text-muted")}>{c.name}</span>
                   <span className="ml-auto text-foreground">{c.actual}</span>
                 </li>
               ))}
@@ -355,6 +421,102 @@ function ActionPanel({ action, onDecided }: { action: Action; onDecided: () => v
         </Card>
       )}
     </>
+  );
+}
+
+const ACTIVE = new Set(["ESCALATED", "OPEN", "AWAITING_APPROVAL", "INVESTIGATING", "REMEDIATING"]);
+const RESOLUTION_LABEL: Record<string, string> = {
+  AUTOMATED: "Resolved autonomously", HUMAN_APPROVED: "Resolved after human approval", MANUAL: "Resolved manually",
+  ACCEPTED_RISK: "Resolved with accepted risk", FALSE_POSITIVE: "Closed as false positive",
+};
+
+function HumanResolution({ incident, onDone }: { incident: IncidentDetail; onDone: () => void }) {
+  const [by, setBy] = useState("ops.manager");
+  const [note, setNote] = useState("");
+  const [acceptRisk, setAcceptRisk] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  if (!ACTIVE.has(incident.status)) {
+    return (
+      <Card className="border-good/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-1.5"><CheckCircle2 className="size-3.5 text-good" /> Outcome</CardTitle>
+          <StatusBadge status={incident.status} />
+        </CardHeader>
+        <CardContent className="space-y-1 text-xs text-muted">
+          <div className="text-sm font-semibold text-foreground">{RESOLUTION_LABEL[incident.resolution ?? ""] ?? incident.status}</div>
+          {incident.resolution_note && <p>“{incident.resolution_note}”</p>}
+          {incident.acknowledged_by && <p>Owner: {incident.acknowledged_by}</p>}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  async function run(kind: string, fn: () => Promise<{ message?: string; incident_status?: string }>) {
+    setBusy(kind);
+    setMessage(null);
+    try {
+      const r = await fn();
+      setMessage({ ok: true, text: r.message ?? `Done: incident is now ${r.incident_status ?? "updated"}` });
+      onDone();
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const escalated = incident.status === "ESCALATED";
+  return (
+    <Card className={cn(escalated ? "border-critical/50" : "border-warning/40")}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-1.5"><Hand className="size-3.5" /> Human resolution</CardTitle>
+        {incident.acknowledged_by ? <Badge tone="info">owner · {incident.acknowledged_by}</Badge> : <Badge tone="warning">unowned</Badge>}
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted">
+          {escalated
+            ? "Automation stopped and handed this incident to a human. Choose how to close it; every option is policy-checked and audited."
+            : incident.status === "AWAITING_APPROVAL"
+              ? "Approve or reject the proposed action below, or take over and resolve the incident yourself."
+              : "The agent is still working. You can take ownership or override it."}
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <Input aria-label="Operator" value={by} onChange={(e) => setBy(e.target.value)} className="font-mono text-xs" />
+          {!incident.acknowledged_by && (
+            <Button variant="outline" size="sm" disabled={!!busy || by.length < 2}
+              onClick={() => run("ack", async () => { await api.acknowledgeIncident(incident.id, by); return { message: `Acknowledged by ${by}` }; })}>
+              <UserCheck /> {busy === "ack" ? "…" : "Take ownership"}
+            </Button>
+          )}
+        </div>
+        {escalated && (
+          <Button size="sm" className="w-full" disabled={!!busy || by.length < 2}
+            onClick={() => run("retry", () => api.retryIncident(incident.id, by, note || undefined))}>
+            <RotateCcw /> {busy === "retry" ? "Running playbook…" : "Approve & retry automated fix"}
+          </Button>
+        )}
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2}
+          placeholder="Resolution note (what you checked / why)…"
+          className="w-full rounded-md border border-border-strong bg-panel px-3 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40" />
+        <label className="flex items-start gap-2 text-[11px] text-muted">
+          <input type="checkbox" checked={acceptRisk} onChange={(e) => setAcceptRisk(e.target.checked)} className="mt-0.5" />
+          Accept residual risk if systems still disagree (recorded as ACCEPTED_RISK)
+        </label>
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="success" size="sm" disabled={!!busy || note.length < 3 || by.length < 2}
+            onClick={() => run("resolve", () => api.resolveIncident(incident.id, by, note, acceptRisk))}>
+            <CheckCircle2 /> {busy === "resolve" ? "…" : "Resolve"}
+          </Button>
+          <Button variant="outline" size="sm" disabled={!!busy || by.length < 2}
+            onClick={() => run("close", () => api.closeIncident(incident.id, by, note || "False positive"))}>
+            <XCircle /> {busy === "close" ? "…" : "Close · false positive"}
+          </Button>
+        </div>
+        {message && <p className={cn("rounded-md px-2.5 py-1.5 text-xs", message.ok ? "bg-good/10 text-good" : "bg-critical/5 text-critical")}>{message.text}</p>}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -451,7 +613,7 @@ export default function IncidentPage() {
               <Button asChild size="sm" variant="outline"><Link href="/approvals">Approval queue <ArrowRight /></Link></Button>
             )}
             {live && (
-              <span className="flex items-center gap-1.5 text-[11px] text-[#8fb0f5]">
+              <span className="flex items-center gap-1.5 text-[11px] text-info">
                 <CircleDashed className="size-3 animate-spin" /> pipeline running
               </span>
             )}
@@ -461,6 +623,14 @@ export default function IncidentPage() {
       </Card>
 
       <Distinction incident={incident} />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Agent path</CardTitle>
+          <span className="text-[10px] uppercase tracking-wider text-subtle">LangGraph · {incident.agent_trace.length} steps</span>
+        </CardHeader>
+        <CardContent><AgentGraph trace={incident.agent_trace} engine="langgraph" /></CardContent>
+      </Card>
 
       <Card>
         <CardHeader><CardTitle>System state comparison</CardTitle></CardHeader>
@@ -475,6 +645,13 @@ export default function IncidentPage() {
           {action && <ActionPanel action={action} onDecided={() => refresh()} />}
         </div>
         <div className="space-y-4 lg:col-span-2">
+          <HumanResolution incident={incident} onDone={() => refresh()} />
+          {incident.risk_factors && (
+            <Card>
+              <CardHeader><CardTitle>Decision risk</CardTitle></CardHeader>
+              <CardContent><RiskMeter risk={incident.risk_factors} /></CardContent>
+            </Card>
+          )}
           <Card>
             <CardHeader>
               <CardTitle>Timeline</CardTitle>

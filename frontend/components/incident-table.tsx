@@ -52,7 +52,7 @@ export function IncidentTable({ incidents, empty }: { incidents: IncidentSummary
                 </span>
               )}
               {i.failure_source === "PAYPAL_PROVIDER_FAILURE" && (
-                <span className="mt-0.5 inline-block rounded bg-critical/10 px-1 text-[10px] text-[#f87171]">PayPal provider failure</span>
+                <span className="mt-0.5 inline-block rounded bg-critical/10 px-1 text-[10px] text-critical">PayPal provider failure</span>
               )}
             </TableCell>
             <TableCell className="text-right font-mono text-[13px]">{money(i.amount, i.currency)}</TableCell>

@@ -10,6 +10,7 @@ export function lifecycleProgress(incident: IncidentDetail): { done: number; blo
   const action = incident.actions.at(-1);
   const verification = action?.result?.verification;
   if (incident.status === "RESOLVED") return { done: 7 };
+  if (incident.status === "CLOSED") return { done: 7, blocked: "Closed by a human as false positive" };
   if (incident.status === "ESCALATED") {
     if (verification?.status === "FAILED") return { done: 4, blocked: "Verification failed" };
     if (action?.status === "REJECTED") return { done: 3, blocked: "Rejected by operator" };
@@ -41,7 +42,7 @@ export function LifecycleStepper({ incident }: { incident: IncidentDetail }) {
                 )}
               />
               <div className={cn("mt-2 flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider",
-                complete ? "text-foreground" : current ? (blocked ? "text-warning" : "text-[#8fb0f5]") : "text-subtle")}
+                complete ? "text-foreground" : current ? (blocked ? "text-warning" : "text-info") : "text-subtle")}
               >
                 {complete && <Check className="size-3 text-good" />}
                 <span className="truncate">{stage}</span>

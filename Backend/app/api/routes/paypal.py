@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,10 +22,11 @@ router = APIRouter(prefix="/payments", tags=["paypal"])
 
 
 @router.post("/paypal/create-order", response_model=CreatePayPalOrderResponse, status_code=201)
-async def create_order(body: CreatePayPalOrderRequest, db: AsyncSession = Depends(get_db)) -> CreatePayPalOrderResponse:
+async def create_order(body: CreatePayPalOrderRequest, request: Request,
+                       db: AsyncSession = Depends(get_db)) -> CreatePayPalOrderResponse:
     created = await paypal_service.create_paypal_payment(
         db, amount=body.amount, demo=body.demo, failure_scenarios=body.failure_scenarios,
-        negative_test=body.negative_test, description=body.description,
+        negative_test=body.negative_test, description=body.description, return_origin=request.headers.get("origin"),
     )
     return CreatePayPalOrderResponse(
         payment=PaymentOut.model_validate(created.payment), order_id=created.order_id,

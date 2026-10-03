@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const TONE_TEXT: Record<BadgeTone, string> = {
-  good: "text-good", warning: "text-warning", serious: "text-serious", critical: "text-[#f87171]", info: "text-[#8fb0f5]",
+  good: "text-good", warning: "text-warning", serious: "text-serious", critical: "text-critical", info: "text-info",
   neutral: "text-muted",
 };
 
@@ -54,7 +54,7 @@ export function SystemStatus() {
         <Row label="Redis" value={data?.redis ?? "…"} tone={data?.redis === "HEALTHY" ? "good" : "warning"}
           detail={data?.celery_workers ? "Celery workers online" : "in-process worker fallback"} />
         <Row label="Groq AI" value={data?.groq === "CONFIGURED" ? "CONNECTED" : "NOT CONFIGURED"} tone={data?.groq === "CONFIGURED" ? "good" : "warning"}
-          detail={data?.groq === "CONFIGURED" ? `${data?.ai ?? "llama-3.3-70b-versatile"} · JSON mode` : "Using deterministic fallback investigator"} />
+          detail={data?.groq === "CONFIGURED" ? `${data?.ai ?? "openai/gpt-oss-20b"} · JSON mode` : "Using deterministic fallback investigator"} />
         <Row label="Webhook" value={webhook}
           tone={webhook === "VERIFIED" ? "good" : webhook === "VERIFICATION_FAILED" ? "critical" : webhook === "NOT_CONFIGURED" ? "neutral" : "info"}
           detail={webhook === "NOT_CONFIGURED" ? "set PAYPAL_WEBHOOK_ID + public tunnel" : (data?.webhook_url ?? undefined)} />

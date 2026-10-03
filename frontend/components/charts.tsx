@@ -56,7 +56,7 @@ export function VolumeChart({ data }: { data: DashboardStats["payment_volume"] }
         <XAxis dataKey="label" {...AXIS} interval="preserveStartEnd" minTickGap={16} />
         <YAxis {...AXIS} allowDecimals={false} width={44} />
         <Tooltip
-          cursor={{ fill: "rgba(255,255,255,0.04)" }}
+          cursor={{ fill: "var(--panel-2)" }}
           content={({ active, payload }: TipProps) => {
             if (!active || !payload?.length) return null;
             const point = payload[0].payload as DashboardStats["payment_volume"][number];
@@ -112,7 +112,7 @@ export function IncidentTypeChart({ data }: { data: DashboardStats["incident_typ
         <XAxis type="number" hide allowDecimals={false} />
         <YAxis type="category" dataKey="label" {...AXIS} width={130} tick={{ fill: "var(--muted)", fontSize: 11 }} />
         <Tooltip
-          cursor={{ fill: "rgba(255,255,255,0.04)" }}
+          cursor={{ fill: "var(--panel-2)" }}
           content={({ active, payload }: TipProps) =>
             active && payload?.length ? (
               <TooltipBox title={String(payload[0].payload.label)} rows={[{ label: "Incidents", value: String(payload[0].value) }]} />

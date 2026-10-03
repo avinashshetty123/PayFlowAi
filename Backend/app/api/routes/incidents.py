@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +16,8 @@ from app.schemas.incident import (
     InvestigateResponse,
     TimelineItem,
 )
-from app.services import query_service
+from app.schemas.action import ActionOut
+from app.services import incident_ops, query_service
 from app.services.orchestrator import run_incident_pipeline
 from app.workers.dispatcher import dispatch_incident_pipeline
 
@@ -81,3 +83,44 @@ async def timeline(incident_ref: str, db: AsyncSession = Depends(get_db)) -> lis
 @router.get("/{incident_ref}/audit", response_model=list[AuditLogOut])
 async def audit(incident_ref: str, db: AsyncSession = Depends(get_db)) -> list[AuditLogOut]:
     return await query_service.incident_audit(db, await resolve_incident_id(db, incident_ref))
+
+
+class OperatorRequest(BaseModel):
+    by: str = Field(default="ops.manager", min_length=2, max_length=64)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ResolveRequest(OperatorRequest):
+    note: str = Field(default="Verified manually", min_length=3, max_length=500)
+    accept_risk: bool = False
+
+
+@router.post("/{incident_ref}/acknowledge")
+async def acknowledge(incident_ref: str, body: OperatorRequest | None = None, db: AsyncSession = Depends(get_db)) -> dict:
+    body = body or OperatorRequest()
+    incident = await incident_ops.acknowledge(db, await resolve_incident_id(db, incident_ref), by=body.by)
+    return {"ok": True, "incident_id": str(incident.id), "acknowledged_by": incident.acknowledged_by}
+
+
+@router.post("/{incident_ref}/retry")
+async def retry(incident_ref: str, body: OperatorRequest | None = None, db: AsyncSession = Depends(get_db)) -> dict:
+    body = body or OperatorRequest()
+    result = await incident_ops.retry_remediation(db, await resolve_incident_id(db, incident_ref), by=body.by, note=body.note)
+    return {"ok": True, "incident_status": result.incident_status, "message": result.message,
+            "action": ActionOut.model_validate(result.action).model_dump(mode="json"), "verification": result.verification}
+
+
+@router.post("/{incident_ref}/resolve")
+async def resolve(incident_ref: str, body: ResolveRequest | None = None, db: AsyncSession = Depends(get_db)) -> dict:
+    body = body or ResolveRequest()
+    incident = await incident_ops.resolve_manually(db, await resolve_incident_id(db, incident_ref), by=body.by,
+                                                   note=body.note, accept_risk=body.accept_risk)
+    return {"ok": True, "incident_status": incident.status, "resolution": incident.resolution}
+
+
+@router.post("/{incident_ref}/close")
+async def close(incident_ref: str, body: OperatorRequest | None = None, db: AsyncSession = Depends(get_db)) -> dict:
+    body = body or OperatorRequest()
+    incident = await incident_ops.close_incident(db, await resolve_incident_id(db, incident_ref), by=body.by,
+                                                 reason=body.note or "False positive")
+    return {"ok": True, "incident_status": incident.status, "resolution": incident.resolution}

@@ -1,6 +1,8 @@
 "use client";
 
-import { Activity, Radio, Trash2 } from "lucide-react";
+import {
+  Activity, Banknote, Gauge, GitCompareArrows, Radio, ShieldAlert, Sparkles, Trash2, UserCheck, Wallet, XCircle,
+} from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -26,26 +28,39 @@ function Stat({
   value,
   sub,
   accent,
+  icon: Icon,
+  href,
 }: {
   label: string;
   value: string | number;
   sub?: string;
   accent?: string;
+  icon: typeof Activity;
+  href?: string;
 }) {
-  return (
-    <Card className="px-4 py-3.5">
-      <div className="text-[11px] font-medium uppercase tracking-wider text-subtle">{label}</div>
-      <div className={cn("mt-1 text-2xl font-semibold tabular tracking-tight", accent ?? "text-foreground")}>
-        {value}
+  const body = (
+    <Card className="flex h-full items-start gap-3 px-4 py-4 transition-colors hover:border-sky/60">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sky/15 text-brand">
+        <Icon className="size-4.5" />
+      </span>
+      <div className="min-w-0">
+        <div className="text-[11px] font-medium uppercase tracking-wider text-subtle">{label}</div>
+        <div className={cn("mt-0.5 text-2xl font-bold tabular tracking-tight", accent ?? "text-foreground")}>{value}</div>
+        {sub && <div className="mt-0.5 truncate text-[11px] text-muted">{sub}</div>}
       </div>
-      {sub && <div className="mt-0.5 text-[11px] text-muted">{sub}</div>}
     </Card>
   );
+  return href ? <Link href={href} className="block">{body}</Link> : body;
 }
 
 export default function DashboardPage() {
   const { data, error, refresh } = useApi(api.dashboard, [], 30000);
-  useLiveRefresh(refresh, (e) => !e.event.startsWith("PAYMENT_EVENT"));
+  const { data: recon, refresh: refreshRecon } = useApi(api.reconSummary, [], 30000);
+  useLiveRefresh(() => {
+    refresh();
+    refreshRecon();
+  }, (e) => !e.event.startsWith("PAYMENT_EVENT"));
+  const atRisk = recon ? Object.entries(recon.exposure_by_currency).reduce((sum, [, v]) => sum + v, 0) : 0;
   const { open } = useLiveDemo();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -72,7 +87,7 @@ export default function DashboardPage() {
         description="Real-time payment operations — PayPal Sandbox payments, AI-driven incident investigation, policy enforcement and autonomous recovery."
         actions={
           <>
-            <Button variant="ghost" size="sm" onClick={clearDb} disabled={busy} className="text-muted hover:text-[#f87171]">
+            <Button variant="ghost" size="sm" onClick={clearDb} disabled={busy} className="text-muted hover:text-critical">
               <Trash2 className="size-3.5" />
               {busy ? "Clearing…" : "Clear DB"}
             </Button>
@@ -89,25 +104,27 @@ export default function DashboardPage() {
 
       {/* Stats */}
       {!data ? (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
-          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[84px]" />)}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-[88px]" />)}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <Stat label="Total payments" value={data.total_payments}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Stat icon={Wallet} label="Total payments" value={data.total_payments} href="/payments"
             sub={`${data.paypal_payments} PayPal · ${money(data.total_volume, data.currency)}`} />
-          <Stat label="Active incidents" value={data.active_incidents}
-            accent={data.active_incidents ? "text-serious" : undefined}
-            sub="open · investigating · escalated" />
-          <Stat label="Auto-recovered" value={data.auto_recovered} accent="text-good"
+          <Stat icon={ShieldAlert} label="Active incidents" value={data.active_incidents} href="/incidents"
+            accent={data.active_incidents ? "text-serious" : undefined} sub="open · investigating · escalated" />
+          <Stat icon={Banknote} label="Money at risk" value={money(atRisk, "USD")} href="/reconciliation"
+            accent={atRisk > 0 ? "text-critical" : "text-good"}
+            sub={recon ? `${recon.open_breaks} open breaks · ${recon.sla_breaches.length} SLA breaches` : "open breaks"} />
+          <Stat icon={UserCheck} label="Awaiting approval" value={data.pending_approvals} href="/approvals"
+            accent={data.pending_approvals ? "text-warning" : undefined} sub="human in the loop" />
+          <Stat icon={Sparkles} label="Auto-recovered" value={data.auto_recovered} accent="text-good"
             sub={`${money(data.amount_recovered, data.currency)} recovered`} />
-          <Stat label="Awaiting approval" value={data.pending_approvals}
-            accent={data.pending_approvals ? "text-warning" : undefined}
-            sub="human in the loop" />
-          <Stat label="Failed" value={data.failed_payments}
-            sub={`${data.refunded_payments} refunded`} />
-          <Stat label="Reconciliation" value={`${data.reconciliation_rate}%`} accent="text-good"
-            sub="payments matched" />
+          <Stat icon={Gauge} label="Auto-heal rate" value={recon ? `${recon.auto_heal_rate}%` : "—"} accent="text-good"
+            sub="breaks fixed without a human" />
+          <Stat icon={GitCompareArrows} label="Reconciliation" value={`${data.reconciliation_rate}%`} accent="text-good"
+            sub="payments matched" href="/reconciliation" />
+          <Stat icon={XCircle} label="Failed payments" value={data.failed_payments} sub={`${data.refunded_payments} refunded`} />
         </div>
       )}
 

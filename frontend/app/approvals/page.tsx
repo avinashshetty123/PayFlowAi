@@ -102,6 +102,8 @@ function ApprovalCard({ item, onDone }: { item: ApprovalItem; onDone: (r: Action
 
 export default function ApprovalsPage() {
   const pending = useApi(() => api.approvals("pending"), [], 20000);
+  const escalated = useApi(() => api.incidents({ status: "ESCALATED", limit: 50 }), [], 20000);
+  useLiveRefresh(escalated.refresh, (e) => e.event.startsWith("INCIDENT"));
   const decided = useApi(() => api.approvals("decided"), [], 30000);
   useLiveRefresh(() => {
     pending.refresh();
@@ -135,6 +137,34 @@ export default function ApprovalsPage() {
             Open incident <ArrowRight className="size-3" />
           </Link>
         </div>
+      )}
+
+      {!!escalated.data?.items.length && (
+        <Card className="border-critical/40 overflow-hidden">
+          <CardHeader>
+            <CardTitle className="text-critical">Needs human resolution · {escalated.data.items.length}</CardTitle>
+            <span className="text-[11px] text-muted">automation stopped; open an incident to retry, resolve or close it</span>
+          </CardHeader>
+          <Table>
+            <TableBody>
+              {escalated.data.items.map((i) => (
+                <TableRow key={i.id}>
+                  <TableCell>
+                    <Link href={`/incidents/${i.id}`} className="font-mono text-[13px] font-semibold hover:text-info">{i.incident_number}</Link>
+                    <div className="text-[11px] text-subtle">{i.transaction_id} · {i.type}</div>
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-[13px]">{money(i.amount, i.currency)}</TableCell>
+                  <TableCell className="text-xs text-muted">{i.acknowledged_by ? `owner ${i.acknowledged_by}` : "unowned"}</TableCell>
+                  <TableCell className="text-right">
+                    <Link href={`/incidents/${i.id}`} className="inline-flex items-center gap-1 rounded-full bg-navy px-3 py-1 text-[11px] font-medium text-white">
+                      Resolve <ArrowRight className="size-3" />
+                    </Link>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
       )}
 
       {pending.data && pending.data.length === 0 && (

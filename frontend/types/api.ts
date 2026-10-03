@@ -157,6 +157,9 @@ export type IncidentSummary = {
   provider_status: string | null;
   failure_source: string | null;
   injected_scenario: string | null;
+  risk_score: number | null;
+  resolution: string | null;
+  acknowledged_by: string | null;
 };
 
 export type HistoricalMatch = {
@@ -174,6 +177,12 @@ export type HistoricalMatch = {
 };
 
 export type Recommendation = {
+  impact?: { customerImpact?: string; financialExposure?: string; blastRadius?: string; urgency?: string } | null;
+  contributingFactors?: string[];
+  remediationPlan?: string[];
+  preventiveMeasures?: string[];
+  anomalies?: string[];
+  confidenceRationale?: string | null;
   incidentType: string;
   rootCause: string;
   confidence: number;
@@ -220,6 +229,10 @@ export type Action = {
     reasons?: string[];
     checks?: PolicyCheck[];
     approval_recheck?: { decision: string; label: string; reasons: string[]; checks: PolicyCheck[] };
+    fired_rules?: string[];
+    risk_score?: number | null;
+    policy_version?: string | null;
+    overridden_ai_action?: string | null;
   };
   result: {
     summary?: string;
@@ -244,6 +257,10 @@ export type IncidentDetail = IncidentSummary & {
   failure_injections: FailureInjection[];
   webhook_events: WebhookEventRow[];
   provider_transactions: ProviderTransaction[];
+  risk_factors: RiskBreakdown | null;
+  acknowledged_at: string | null;
+  resolution_note: string | null;
+  agent_trace: { node: string; at: string; outcome: string }[];
 };
 
 export type TimelineItem = {
@@ -371,4 +388,100 @@ export type ActionDecision = {
   verification: Verification | null;
   deduplicated: boolean;
   message: string;
+};
+
+
+// ---- operations: alerts, policy, agent, audit integrity, reconciliation analytics ----
+
+export type NotificationItem = {
+  id: string;
+  incident_id: string | null;
+  transaction_id: string | null;
+  severity: "P1" | "P2" | "P3" | "P4";
+  category: string;
+  title: string;
+  body: string;
+  link: string | null;
+  status: "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
+  escalation_level: number;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
+  created_at: string;
+  deliveries: { channel: string; target: string; status: string; attempts: number; escalation_level: number; error: string | null; sent_at: string | null }[];
+};
+
+export type NotificationList = { items: NotificationItem[]; unread: number; urgent: number };
+
+export type ChannelConfig = {
+  channels: { channel: string; label: string; configured: boolean; target: string | null; env: string; severities: string[] }[];
+  routes: Record<string, string[]>;
+  escalation_minutes: number;
+};
+
+export type PolicyRule = { id: string; name: string; effect: string; description: string };
+
+export type PolicyCatalog = {
+  version: string;
+  rules: PolicyRule[];
+  playbook: Record<string, string[]>;
+  thresholds: Record<string, number>;
+  kill_switch: { enabled: boolean; reason: string | null; updated_by: string | null; updated_at: string | null };
+  circuit_breaker: { count: number; limit: number; window_minutes: number; tripped: boolean };
+};
+
+export type RiskBreakdown = {
+  score: number;
+  band: string;
+  threshold: number;
+  factors: { name: string; points: number; detail: string }[];
+};
+
+export type PolicySimulation = {
+  transaction_id: string;
+  incident_number: string;
+  incident_type: string;
+  evaluation: {
+    action_type: string;
+    decision: string;
+    label: string;
+    reasons: string[];
+    checks: PolicyCheck[];
+    fired_rules: string[];
+    risk_score: number | null;
+    policy_version: string | null;
+  };
+  risk: RiskBreakdown;
+};
+
+export type AgentGraph = {
+  engine: string;
+  nodes: { id: string; label: string; kind: string }[];
+  edges: { from: string; to: string; label?: string }[];
+  mermaid: string | null;
+};
+
+export type AuditIntegrity = {
+  verified: boolean;
+  sealed: number;
+  unsealed: number;
+  checked: number;
+  broken_at: { chain_index: number; audit_id: string; event: string; transaction_id: string } | null;
+  head: string;
+};
+
+export type ReconSummary = {
+  open_breaks: number;
+  exposure_by_currency: Record<string, number>;
+  exposure_by_type: { type: string; count: number; exposure: number }[];
+  aging: { bucket: string; count: number }[];
+  sla_breaches: {
+    incident_id: string; incident_number: string; transaction_id: string; type: string; severity: string;
+    age_minutes: number; sla_minutes: number; status: string; exposure: number; currency: string;
+  }[];
+  sla_policy: Record<string, number>;
+  match_rate: number;
+  auto_heal_rate: number;
+  mttr_seconds: number | null;
+  resolved_incidents: number;
+  runs_last_24h: number;
 };
