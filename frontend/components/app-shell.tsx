@@ -5,6 +5,7 @@ import {
   CreditCard,
   FileClock,
   GitCompareArrows,
+  Info,
   LayoutDashboard,
   OctagonPause,
   Radio,
@@ -14,11 +15,12 @@ import {
   Waypoints,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useSyncExternalStore } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { EventStreamProvider, useEventStream, useLiveRefresh } from "@/components/event-stream";
 import { LiveDemoProvider, useLiveDemo } from "@/components/live-demo";
+import { INTRO_SEEN_KEY } from "@/lib/intro";
 import { NotificationCenter } from "@/components/notification-center";
 import { Button } from "@/components/ui/button";
 import { useApi } from "@/hooks/use-api";
@@ -32,6 +34,7 @@ const NAV_GROUPS = [
     items: [
       { href: "/", label: "Dashboard", icon: LayoutDashboard },
       { href: "/payments", label: "Payments", icon: CreditCard },
+      { href: "/welcome", label: "About PayFlow", icon: Info },
     ],
   },
   {
@@ -202,7 +205,24 @@ function TopBar() {
   );
 }
 
+/** First visit to the console goes to the intro page; its "Enter console" button marks it seen. */
+function useFirstVisitIntro(pathname: string) {
+  const router = useRouter();
+  useEffect(() => {
+    if (pathname !== "/") return;
+    try {
+      if (!localStorage.getItem(INTRO_SEEN_KEY)) router.replace("/welcome");
+    } catch {
+      /* storage blocked: stay on the dashboard */
+    }
+  }, [pathname, router]);
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  useFirstVisitIntro(pathname);
+  // The intro page is a full-screen marketing page without the console chrome.
+  if (pathname.startsWith("/welcome")) return <>{children}</>;
   return (
     <EventStreamProvider>
       <LiveDemoProvider>

@@ -327,22 +327,35 @@ async def test_whatsapp_meta_cloud_api_with_template_fallback(monkeypatch):
     targets = [t for t in channels.configured_targets() if t.channel == "whatsapp"]
     assert [t.target for t in targets] == ["917249254816", "447700900123"]
 
-    sent: list[dict] = []
+    def run(template_exists: bool):
+        sent: list[dict] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v21.0/1161273803736000/messages"
-        assert request.headers["Authorization"] == "Bearer meta-token"
-        body = json.loads(request.content)
-        sent.append(body)
-        if body["type"] == "text":  # no open 24h window -> Meta rejects free-form text
-            return httpx.Response(400, json={"error": {"code": 131047, "message": "Re-engagement message"}})
-        return httpx.Response(200, json={"messages": [{"id": "wamid.TEST"}]})
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v21.0/1161273803736000/messages"
+            assert request.headers["Authorization"] == "Bearer meta-token"
+            body = json.loads(request.content)
+            sent.append(body)
+            if body.get("template", {}).get("name") == "payflow_alert" and not template_exists:
+                return httpx.Response(404, json={"error": {"code": 132001, "message": "Template name does not exist"}})
+            return httpx.Response(200, json={"messages": [{"id": f"wamid.{len(sent)}"}]})
 
-    message_id = await channels.send(targets[0], severity="P1", title="P1 incident", body="Ledger mismatch",
-                                     link=None, transport=httpx.MockTransport(handler))
-    assert message_id == "wamid.TEST"
-    assert [b["type"] for b in sent] == ["text", "template"]
-    assert sent[0]["to"] == "917249254816" and "Ledger mismatch" in sent[0]["text"]["body"]
+        return sent, httpx.MockTransport(handler)
+
+    # Approved template: one message, delivered regardless of the 24h window, params sanitised.
+    sent, transport = run(template_exists=True)
+    assert await channels.send(targets[0], severity="P1", title="P1 incident", body="Ledger\nmismatch   on    TXN1",
+                               link="https://console/incidents/1", transport=transport) == "wamid.1"
+    assert len(sent) == 1 and sent[0]["type"] == "template"
+    params = [p["text"] for p in sent[0]["template"]["components"][0]["parameters"]]
+    assert params == ["P1 incident", "Ledger mismatch on TXN1", "https://console/incidents/1"]
+
+    # No template yet: full text (if the window is open) + hello_world ping (always delivered).
+    sent, transport = run(template_exists=False)
+    assert await channels.send(targets[0], severity="P1", title="P1 incident", body="Ledger mismatch",
+                               link=None, transport=transport) == "wamid.2"
+    assert [b["type"] for b in sent] == ["template", "text", "template"]
+    assert sent[1]["to"] == "917249254816" and "Ledger mismatch" in sent[1]["text"]["body"]
+    assert sent[2]["template"]["name"] == "hello_world"
 
 
 def test_internal_fault_and_booked_amount_rules_require_four_eyes():

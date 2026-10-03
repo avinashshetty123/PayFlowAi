@@ -238,7 +238,7 @@ All channels are optional; configure any of them in `Backend/.env` (or the Rende
 | Channel | Setup |
 |---|---|
 | **Phone push (fastest)** | Install the free **ntfy** app, subscribe to a hard-to-guess topic, set `NTFY_TOPIC=<topic>`. |
-| **WhatsApp (Meta Cloud API)** | developers.facebook.com → your app → WhatsApp → API Setup: add the admin number as a recipient. Set `WHATSAPP_ACCESS_TOKEN` (use a permanent System User token in production; the API Setup token expires in 24h), `WHATSAPP_PHONE_NUMBER_ID`, `ALERT_WHATSAPP_TO=91XXXXXXXXXX`. Send any message to the business number from the admin phone once a day to keep the 24h window open for full-text alerts; outside it PayFlow falls back to the `hello_world` template as a wake-up ping. |
+| **WhatsApp (Meta Cloud API)** | developers.facebook.com → your app → WhatsApp → API Setup: add the admin number as a recipient. Set `WHATSAPP_ACCESS_TOKEN` (use a permanent System User token in production; the API Setup token expires in 24h), `WHATSAPP_PHONE_NUMBER_ID`, `ALERT_WHATSAPP_TO=91XXXXXXXXXX`. For alerts that arrive at any time, create a **Utility** template in WhatsApp Manager named `payflow_alert` (English US) with body `PayFlow alert: {{1}}. Details: {{2}}. Open console: {{3}}`. Until it is approved, PayFlow sends the full text (delivered only within 24h of the admin messaging the business number) plus Meta's `hello_world` template as a wake-up ping. |
 | **Telegram** | Create a bot with @BotFather, message it once, read your chat id from `https://api.telegram.org/bot<token>/getUpdates`. Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. |
 | **Slack / Teams / PagerDuty bridge** | `SLACK_WEBHOOK_URL` or `ALERT_WEBHOOK_URL`. |
 

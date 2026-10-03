@@ -18,6 +18,11 @@ class ChannelError(Exception):
 GRAPH_API = "https://graph.facebook.com/v21.0"
 # Meta error codes meaning "free-form text not allowed: no open 24h customer-service window".
 WHATSAPP_WINDOW_ERRORS = {131047, 131026, 470}
+# Business-initiated alert template (create it once in WhatsApp Manager; see README).
+ALERT_TEMPLATE = "payflow_alert"
+ALERT_TEMPLATE_LANGUAGE = "en_US"
+# Template missing / not approved yet / wrong parameter count -> use the fallback path.
+TEMPLATE_UNAVAILABLE_ERRORS = {132000, 132001, 132005, 132007, 132012, 132015, 132016}
 
 
 def whatsapp_number(raw: str) -> str:
@@ -64,7 +69,7 @@ async def send(target: ChannelTarget, *, severity: str, title: str, body: str, l
     text = f"{title}\n{body}" + (f"\n{link}" if link else "")
     async with httpx.AsyncClient(timeout=10, transport=transport) as client:
         if target.channel == "whatsapp":
-            return await _send_whatsapp(client, target.target, text)
+            return await _send_whatsapp(client, target.target, title=title, body=body, link=link)
         if target.channel == "telegram":
             response = await client.post(
                 f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -93,22 +98,48 @@ async def send(target: ChannelTarget, *, severity: str, title: str, body: str, l
     raise ChannelError(f"Unknown channel {target.channel}")
 
 
-async def _send_whatsapp(client: httpx.AsyncClient, to: str, text: str) -> str | None:
-    """Meta Cloud API. Free-form text is delivered inside the 24h window that opens whenever the
-    admin messages the business number; outside it Meta only accepts templates, so we fall back to
-    the pre-approved `hello_world` template as a wake-up ping (the full alert stays in the console)."""
+async def _send_whatsapp(client: httpx.AsyncClient, to: str, *, title: str, body: str, link: str | None) -> str | None:
+    """Meta Cloud API delivery that does not depend on the 24h customer-service window.
+
+    1. Approved `payflow_alert` template (delivered any time): {{1}} title, {{2}} details, {{3}} console link.
+    2. Template not created/approved yet -> free-form text (delivered only if the admin messaged the
+       business number in the last 24h; Meta still answers 200 otherwise) followed by the always-approved
+       `hello_world` template, so the phone buzzes even outside the window.
+    """
     url = f"{GRAPH_API}/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {settings.WHATSAPP_ACCESS_TOKEN}"}
+    params = [_template_param(title, 200), _template_param(body, 700), _template_param(link or settings.FRONTEND_URL, 300)]
+    response = await client.post(url, headers=headers, json={
+        "messaging_product": "whatsapp", "to": to, "type": "template",
+        "template": {"name": ALERT_TEMPLATE, "language": {"code": ALERT_TEMPLATE_LANGUAGE},
+                     "components": [{"type": "body", "parameters": [{"type": "text", "text": p} for p in params]}]},
+    })
+    if response.status_code < 400 or _meta_error_code(response) not in TEMPLATE_UNAVAILABLE_ERRORS:
+        _raise(response)
+        return _message_id(response)
+
+    text = f"{title}\n{body}" + (f"\n{link}" if link else "")
     response = await client.post(url, headers=headers, json={
         "messaging_product": "whatsapp", "recipient_type": "individual", "to": to,
         "type": "text", "text": {"preview_url": False, "body": text[:4000]},
     })
-    if response.status_code >= 400 and _meta_error_code(response) in WHATSAPP_WINDOW_ERRORS:
-        response = await client.post(url, headers=headers, json={
-            "messaging_product": "whatsapp", "to": to, "type": "template",
-            "template": {"name": "hello_world", "language": {"code": "en_US"}},
-        })
-    _raise(response)
+    if response.status_code >= 400 and _meta_error_code(response) not in WHATSAPP_WINDOW_ERRORS:
+        _raise(response)
+    text_id = _message_id(response) if response.status_code < 400 else None
+    ping = await client.post(url, headers=headers, json={
+        "messaging_product": "whatsapp", "to": to, "type": "template",
+        "template": {"name": "hello_world", "language": {"code": "en_US"}},
+    })
+    _raise(ping)
+    return text_id or _message_id(ping)
+
+
+def _template_param(value: str, limit: int) -> str:
+    """Meta rejects template parameters containing newlines, tabs or 4+ consecutive spaces."""
+    return " ".join(value.split())[:limit] or "-"
+
+
+def _message_id(response: httpx.Response) -> str | None:
     return (response.json().get("messages") or [{}])[0].get("id")
 
 

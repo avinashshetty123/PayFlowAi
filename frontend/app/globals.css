@@ -182,3 +182,98 @@ body {
 .slide-in {
   animation: slide-in 0.18s ease-out;
 }
+
+/* ---- intro page (/welcome) ------------------------------------------------------------ */
+.landing-hero {
+  background:
+    radial-gradient(60% 60% at 85% 20%, rgba(0, 186, 242, 0.22), transparent 70%),
+    radial-gradient(50% 50% at 10% 90%, rgba(46, 91, 180, 0.35), transparent 70%),
+    #002e6e;
+}
+
+.landing-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+}
+
+@keyframes landing-up {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: none; }
+}
+.landing-up { animation: landing-up 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+
+@keyframes landing-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.landing-fade { animation: landing-fade 0.45s ease-out both; }
+
+@keyframes landing-shimmer {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.landing-shimmer {
+  background: linear-gradient(90deg, #00baf2, #7fe0ff, #00baf2, #7fe0ff);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: landing-shimmer 4s linear infinite;
+}
+
+@keyframes landing-dash { to { stroke-dashoffset: -22; } }
+.landing-dash { animation: landing-dash 1.2s linear infinite; }
+
+@keyframes landing-breathe {
+  0%, 100% { opacity: 0.6; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+.landing-breathe { transform-origin: center; transform-box: fill-box; animation: landing-breathe 3.2s ease-in-out infinite; }
+
+@keyframes landing-alarm {
+  0%, 100% { filter: drop-shadow(0 0 0 rgba(255, 107, 107, 0)); }
+  50% { filter: drop-shadow(0 0 10px rgba(255, 107, 107, 0.9)); }
+}
+.landing-alarm { animation: landing-alarm 0.9s ease-in-out infinite; }
+
+@keyframes landing-alarm-soft {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(209, 42, 42, 0.35); }
+  50% { box-shadow: 0 0 0 8px rgba(209, 42, 42, 0); }
+}
+.landing-alarm-soft { animation: landing-alarm-soft 1.6s ease-out infinite; }
+
+.reveal {
+  opacity: 0;
+  transform: translateY(26px);
+  transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.reveal.in { opacity: 1; transform: none; }
+
+/* lifecycle: steps light up one after another, the progress line fills behind them */
+.landing-step { opacity: 0.35; }
+.reveal.in .landing-step { animation: landing-step 0.5s ease-out forwards; }
+@keyframes landing-step {
+  from { opacity: 0.35; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.landing-progress { height: 0; }
+.reveal.in .landing-progress { animation: landing-fill-y 2.6s ease-in-out forwards; }
+@keyframes landing-fill-y { to { height: 100%; } }
+@media (min-width: 768px) {
+  .landing-progress { width: 0; }
+  .reveal.in .landing-progress { animation-name: landing-fill-x; }
+  @keyframes landing-fill-x { to { width: 100%; } }
+}
+
+html { scroll-behavior: smooth; }
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-up, .landing-fade, .landing-shimmer, .landing-dash, .landing-breathe, .landing-alarm,
+  .landing-alarm-soft, .reveal.in .landing-step, .reveal.in .landing-progress { animation: none; }
+  .reveal, .landing-step { opacity: 1; transform: none; transition: none; }
+  .landing-progress { height: 100%; }
+  html { scroll-behavior: auto; }
+}
