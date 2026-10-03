@@ -41,6 +41,8 @@ def score_risk(
     action: str | None,
     repeat_incidents: int = 0,
     provider_failure: bool = False,
+    internal_fault: bool = False,
+    amount_mismatch: bool = False,
 ) -> RiskScore:
     factors: list[dict] = []
 
@@ -62,6 +64,9 @@ def score_risk(
     add("AI risk rating", {"HIGH": 15, "MEDIUM": 5}.get(ai_risk or "", 0), f"investigator rated {ai_risk}")
     add("Repeat customer incidents", min(repeat_incidents * 5, 15), f"{repeat_incidents} prior incidents")
     add("Provider-side failure", 5 if provider_failure else 0, "PayPal reported a failure")
+    add("PayFlow component failure", 25 if internal_fault else 0,
+        "ledger / merchant / webhook intake failed: the fixing system is the failing system")
+    add("Booked amount differs", 20 if amount_mismatch else 0, "ledger amount differs from settled amount")
     if action == "REFUND":
         add("Outbound money movement", 10, "refunds send money back to the customer")
 

@@ -1,6 +1,6 @@
 """Operator alerting with fintech-grade semantics.
 
-* Severity routing  P1 → every channel · P2 → WhatsApp/Telegram/push/Slack · P3 → push/Slack · P4 → in-app only
+* Severity routing  P1/P2 → every channel · P3 → WhatsApp/push/Slack · P4 → in-app only
 * Transactional outbox: the alert row is written in the same DB transaction as the incident change;
   a background pump delivers it, so a slow WhatsApp API can never block or roll back a payment flow.
 * Deduplication per (incident, kind); resolution auto-closes open alerts for that incident.
@@ -29,7 +29,7 @@ logger = logging.getLogger("payflow.notifications")
 ROUTES: dict[str, set[str]] = {
     "P1": {"whatsapp", "telegram", "ntfy", "slack", "webhook"},
     "P2": {"whatsapp", "telegram", "ntfy", "slack", "webhook"},
-    "P3": {"ntfy", "slack", "webhook"},
+    "P3": {"whatsapp", "ntfy", "slack", "webhook"},  # every new incident reaches the on-call phone
     "P4": set(),
 }
 SEVERITY_FROM_INCIDENT = {"CRITICAL": "P1", "HIGH": "P2", "MEDIUM": "P3", "LOW": "P4"}

@@ -19,7 +19,7 @@ const DEMOS = [
     value: "LEDGER_MISMATCH",
     label: "Real-time ledger mismatch",
     icon: Sparkles,
-    hint: "Real PayPal Sandbox payment. PayFlow then injects a ledger write failure into its own ledger and recovers autonomously.",
+    hint: "Real PayPal Sandbox payment. PayFlow then injects a ledger write failure into its own ledger. AI investigates, policy SYS-FAULT holds the ledger fix for your approval, then PayFlow repairs and verifies it.",
     defaultFailure: "LEDGER_WRITE_FAILURE",
   },
   {
@@ -105,7 +105,7 @@ function Progress({ order, events }: { order: CreatedOrder; events: LiveEvent[] 
         <div className={cn("flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2",
           resolved ? "border-good/40 bg-good/5" : awaiting ? "border-warning/40 bg-warning/5" : "border-info/40 bg-info/5")}>
           <span className="text-xs text-foreground">
-            {resolved ? "Incident resolved autonomously" : awaiting ? "Waiting for human approval" : "PayFlow is handling an incident"}
+            {resolved ? "Incident resolved and verified" : awaiting ? "Waiting for human approval" : "PayFlow is handling an incident"}
           </span>
           <Button asChild size="sm">
             <Link href={awaiting ? "/approvals" : `/incidents/${incident.incidentId}`}>

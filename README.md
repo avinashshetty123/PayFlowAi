@@ -29,6 +29,7 @@ failure to demonstrate autonomous recovery."*
 | **LangGraph incident agent** | The lifecycle is an explicit `StateGraph` (investigate → decide → execute/human gate → verify → reconcile). Every node is a deterministic PayFlow stage, so no LLM inside the graph can move money. The path each incident took is recorded and drawn in the console. |
 | **Policy can overrule the AI** | Guardrail **PB-001** checks the AI's action against the remediation playbook. In production the model once recommended `RETRY_WEBHOOK` for a ledger mismatch; the policy now rejects it and substitutes `RECONCILE_LEDGER`, and the override is audited. |
 | **Explainable risk score (0–100)** | Every decision carries a score with named factors (amount vs limit, AI uncertainty, incident type, repeat customer, outbound money). A score of 75 or more requires a human. |
+| **Four-eyes on internal faults** | Rule **SYS-FAULT**: when PayFlow's own ledger, merchant service or webhook intake caused the incident, the fix waits for a human (the system that would apply the correction is the one that failed). Rule **LEDGER-AMT**: correcting a booked amount is a manual journal adjustment and always follows maker-checker. If the systems reconcile on their own first (e.g. a delayed webhook arrives), the incident self-heals and the pending approval is withdrawn. |
 | **Kill switch + circuit breaker** | One switch pauses all autonomous financial actions. A rolling-window breaker caps automated fixes so runaway automation is contained. |
 | **Human resolution** | Escalated incidents can be acknowledged, retried with human authorisation (new idempotency attempt key), resolved after a fresh reconciliation (or with explicit risk acceptance), or closed as a false positive. |
 | **Rich AI analysis** | Root cause, confidence rationale, customer impact, financial exposure, blast radius, urgency, an ordered remediation plan, contributing factors, prevention and anomalies, from Groq (`reasoning_effort=low`, hidden reasoning) or the deterministic fallback. |
@@ -241,7 +242,7 @@ All channels are optional; configure any of them in `Backend/.env` (or the Rende
 | **Telegram** | Create a bot with @BotFather, message it once, read your chat id from `https://api.telegram.org/bot<token>/getUpdates`. Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. |
 | **Slack / Teams / PagerDuty bridge** | `SLACK_WEBHOOK_URL` or `ALERT_WEBHOOK_URL`. |
 
-Then open **Alerts → Send test alert**. Routing: P1/P2 → all channels, P3 → push/Slack/webhook, P4 → in-app only.
+Then open **Alerts → Send test alert**. Routing: P1/P2 → all channels, P3 → WhatsApp/push/Slack/webhook, P4 → in-app only.
 Unacknowledged P1/P2 alerts are re-sent every `ALERT_ESCALATION_MINUTES` (max 3).
 
 ### Local vs hosted (automatic)

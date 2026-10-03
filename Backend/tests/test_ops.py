@@ -343,3 +343,29 @@ async def test_whatsapp_meta_cloud_api_with_template_fallback(monkeypatch):
     assert message_id == "wamid.TEST"
     assert [b["type"] for b in sent] == ["text", "template"]
     assert sent[0]["to"] == "917249254816" and "Ledger mismatch" in sent[0]["text"]["body"]
+
+
+def test_internal_fault_and_booked_amount_rules_require_four_eyes():
+    from app.services.policy_service import PolicyContext, PolicyEngine
+
+    base = dict(gateway="SUCCESS", bank="SETTLED", merchant="SUCCESS", ledger="FAILED", webhook="RECEIVED",
+                overall="MISMATCH", amount=Decimal("10.00"), bank_amount=Decimal("10.00"), currency="USD",
+                ai_confidence=0.95, incident_type="LEDGER_MISMATCH", risk_score=20)
+    engine = PolicyEngine()
+    # A synthetic glitch with matching amounts may still auto-heal...
+    assert engine.evaluate("RECONCILE_LEDGER", PolicyContext(**base)).decision == "ALLOW"
+    # ...but a failure inside PayFlow's own systems never does,
+    internal = engine.evaluate("RECONCILE_LEDGER", PolicyContext(**base, failure_source="PAYFLOW_INFRASTRUCTURE_FAILURE"))
+    assert internal.decision == "HUMAN_APPROVAL_REQUIRED" and "SYS-FAULT" in internal.fired_rules
+    # nor does correcting a booked amount,
+    wrong_amount = engine.evaluate("RECONCILE_LEDGER", PolicyContext(**{**base, "ledger": "SUCCESS"}, ledger_amount=Decimal("9.00")))
+    assert wrong_amount.decision == "HUMAN_APPROVAL_REQUIRED" and "LEDGER-AMT" in wrong_amount.fired_rules
+    # and a recorded human approval satisfies both.
+    approved = engine.evaluate("RECONCILE_LEDGER", PolicyContext(
+        **base, failure_source="PAYFLOW_INFRASTRUCTURE_FAILURE", ledger_amount=Decimal("9.00"), human_approved=True))
+    assert approved.decision == "ALLOW"
+
+
+def test_every_new_incident_reaches_whatsapp():
+    assert "whatsapp" in alerts.ROUTES["P3"] and "whatsapp" in alerts.ROUTES["P2"]
+    assert alerts.ROUTES["P4"] == set()

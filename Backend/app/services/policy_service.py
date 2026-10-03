@@ -34,6 +34,13 @@ RULES: list[dict] = [
      "description": "MARK_PAYMENT_FAILED only when no funds settled and the provider did not capture."},
     {"id": "LIM-REFUND", "name": "Refund auto-approve limit", "effect": "HUMAN_APPROVAL_REQUIRED",
      "description": "Refunds above the per-currency limit (USD 25 / INR 5000) need a human."},
+    {"id": "SYS-FAULT", "name": "Internal system fault: four-eyes", "effect": "HUMAN_APPROVAL_REQUIRED",
+     "description": "When the root cause is a failure inside PayFlow (ledger, merchant order service, webhook intake), "
+                    "any fix that writes to the books needs a human sign-off: the component that would apply the "
+                    "correction is the one that just failed, so an operator confirms it is healthy first."},
+    {"id": "LEDGER-AMT", "name": "Booked amount correction", "effect": "HUMAN_APPROVAL_REQUIRED",
+     "description": "If the ledger booked a different amount than the provider settled, the fix is a manual journal "
+                    "adjustment and always follows maker-checker, whatever the amount or AI confidence."},
     {"id": "AI-CONF", "name": "AI confidence floor", "effect": "HUMAN_APPROVAL_REQUIRED",
      "description": "Financial actions need AI confidence >= MIN_AUTOMATION_CONFIDENCE."},
     {"id": "AI-FLAG", "name": "AI escalation flags", "effect": "HUMAN_APPROVAL_REQUIRED",
@@ -54,6 +61,8 @@ DECISION_LABELS = {
     PolicyDecision.HUMAN_APPROVAL_REQUIRED: "HUMAN APPROVAL REQUIRED",
     PolicyDecision.DENY: "ACTION DENIED",
 }
+
+INTERNAL_FAULT = "PAYFLOW_INFRASTRUCTURE_FAILURE"
 
 FINANCIAL_ACTIONS = frozenset({
     ActionType.RECONCILE_LEDGER, ActionType.RETRY_WEBHOOK, ActionType.REFUND, ActionType.MARK_PAYMENT_FAILED,
@@ -83,6 +92,11 @@ class PolicyContext:
     risk_score: int | None = None
     kill_switch: bool = False
     automation_tripped: bool = False
+    failure_source: str | None = None
+
+    @property
+    def amount_mismatch(self) -> bool:
+        return self.ledger_amount is not None and self.bank_amount is not None and self.ledger_amount != self.bank_amount
 
     @classmethod
     def from_payment(cls, payment: Payment, **kwargs) -> "PolicyContext":
@@ -141,6 +155,20 @@ class PolicyEngine:
             fired.append("LIM-REFUND")
 
         if decision == PolicyDecision.ALLOW and action in FINANCIAL_ACTIONS and not ctx.human_approved:
+            if ctx.failure_source == INTERNAL_FAULT:
+                checks.append(_check("internal component healthy", False,
+                                     "root cause is a PayFlow component failure: operator sign-off required"))
+                decision = PolicyDecision.HUMAN_APPROVAL_REQUIRED
+                fired.append("SYS-FAULT")
+                reasons.append("Root cause is a failure inside PayFlow's own systems: four-eyes sign-off required "
+                               "before writing to the books")
+            if action == ActionType.RECONCILE_LEDGER and ctx.amount_mismatch:
+                checks.append(_check("booked amount == settled amount", False,
+                                     f"ledger={ctx.ledger_amount} settled={ctx.bank_amount}"))
+                decision = PolicyDecision.HUMAN_APPROVAL_REQUIRED
+                fired.append("LEDGER-AMT")
+                reasons.append(f"Ledger booked {money(ctx.ledger_amount, ctx.currency)} but "
+                               f"{money(ctx.bank_amount, ctx.currency)} settled: manual journal adjustment needs maker-checker")
             if ctx.risk_score is not None:
                 over = ctx.risk_score >= HUMAN_THRESHOLD
                 checks.append(_check("risk score", not over, f"{ctx.risk_score} vs threshold {HUMAN_THRESHOLD}"))

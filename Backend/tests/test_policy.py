@@ -31,10 +31,11 @@ def test_reconcile_denied_when_ledger_and_merchant_already_in_sync():
     assert engine.evaluate("RECONCILE_LEDGER", ctx(ledger="SUCCESS", merchant="SUCCESS")).decision == PolicyDecision.DENY
 
 
-def test_reconcile_allowed_for_merchant_only_or_amount_mismatch():
+def test_reconcile_allowed_for_merchant_only_amount_mismatch_needs_maker_checker():
     assert engine.evaluate("RECONCILE_LEDGER", ctx(ledger="SUCCESS", merchant="PENDING")).decision == PolicyDecision.ALLOW
     wrong_amount = ctx(ledger="SUCCESS", merchant="SUCCESS", ledger_amount=Decimal("45"))
-    assert engine.evaluate("RECONCILE_LEDGER", wrong_amount).decision == PolicyDecision.ALLOW
+    evaluation = engine.evaluate("RECONCILE_LEDGER", wrong_amount)
+    assert evaluation.decision == PolicyDecision.HUMAN_APPROVAL_REQUIRED and "LEDGER-AMT" in evaluation.fired_rules
 
 
 def test_usd_refund_threshold_from_settings():

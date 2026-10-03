@@ -44,7 +44,7 @@ from app.services.control_service import automation_rate, kill_switch
 from app.services.playbook import playbook_action
 from app.services.risk_service import RiskScore, score_risk
 from app.services.payment_service import PaymentService, PaymentStateService, snapshot
-from app.services.policy_service import PolicyContext, PolicyEngine
+from app.services.policy_service import INTERNAL_FAULT, PolicyContext, PolicyEngine
 from app.services.reconciliation_service import ReconciliationResult, ReconciliationService
 from app.services.simulator_service import SimulatorService
 from app.services.verification_service import VerificationService
@@ -112,6 +112,8 @@ async def detect(
     incident = None
     if not result.consistent:
         incident, _ = await IncidentService(session).create_from_reconciliation(payment, result)
+    else:
+        await _self_heal(session, payment, trigger)
     payment.reconciliation_status = str(
         ReconciliationStatus.MATCHED if result.consistent else ReconciliationStatus.MISMATCH
     )
@@ -128,6 +130,36 @@ async def detect(
             result={"consistent": result.consistent, "incident_type": str(result.incident_type) if result.incident_type else None},
         )
     return result, incident
+
+
+SELF_HEALABLE = (IncidentStatus.OPEN, IncidentStatus.AWAITING_APPROVAL, IncidentStatus.ESCALATED)
+
+
+async def _self_heal(session: AsyncSession, payment: Payment, trigger: str) -> None:
+    """Systems agree again on their own (e.g. a delayed webhook finally arrived): close incidents that were
+    waiting on a human, withdraw their pending approvals (nothing was executed), and clear the alerts.
+    Incidents mid-pipeline (INVESTIGATING / REMEDIATING) are left to the pipeline to finish."""
+    from app.notifications.service import resolve_incident_alerts
+    from app.services.incident_ops import _reject_pending
+
+    rows = list(await session.scalars(select(Incident).where(
+        Incident.payment_id == payment.id, Incident.status.in_([str(s) for s in SELF_HEALABLE]))))
+    for incident in rows:
+        await _reject_pending(session, incident, by="reconciliation-engine",
+                              reason="Superseded: systems reconciled on their own before approval")
+        incident.status = str(IncidentStatus.RESOLVED)
+        incident.resolved_at = utcnow()
+        incident.resolution = "SELF_HEALED"
+        incident.resolution_note = f"All systems consistent again ({trigger}); no remediation was executed"
+        incident.final_snapshot = snapshot(payment)
+        await AuditService(session).record(
+            transaction_id=payment.transaction_id, incident_id=incident.id, event=AuditEvent.INCIDENT_RESOLVED,
+            actor="reconciliation-engine", reason=f"{incident.incident_number} self-healed: {incident.resolution_note}",
+            result={"resolution": "SELF_HEALED"},
+        )
+        await _alert(session, incident, payment, "INCIDENT_RESOLVED", "Systems reconciled on their own; pending approval withdrawn")
+        await resolve_incident_alerts(session, incident.id)
+        _trace(session, incident, payment, "self_heal", "systems consistent again")
 
 
 async def ingest_simulated_payment(
@@ -249,21 +281,24 @@ async def _policy_context(session: AsyncSession, incident: Incident, payment: Pa
     from app.ai.tools import get_customer_history
 
     history = await get_customer_history(session, payment)
+    bank_amount, ledger_amount = await _bank_amount(session, payment), await _ledger_amount(session, payment)
     risk = score_risk(
         incident_type=incident.type, amount=payment.amount, currency=payment.currency, ai_confidence=incident.confidence,
         ai_risk=incident.risk, action=action or incident.recommended_action,
         repeat_incidents=history["other_incidents"], provider_failure=incident.failure_source == "PAYPAL_PROVIDER_FAILURE",
+        internal_fault=incident.failure_source == INTERNAL_FAULT,
+        amount_mismatch=bank_amount is not None and ledger_amount is not None and bank_amount != ledger_amount,
     )
     switch = await kill_switch(session)
     rate = await automation_rate(session)
     ctx = PolicyContext.from_payment(
         payment,
-        bank_amount=await _bank_amount(session, payment),
-        ledger_amount=await _ledger_amount(session, payment),
+        bank_amount=bank_amount,
+        ledger_amount=ledger_amount,
         refund_completed=await _refund_completed(session, payment),
         ai_confidence=incident.confidence, ai_risk=incident.risk, ai_requires_human=incident.requires_human,
         incident_type=incident.type, risk_score=risk.score, kill_switch=switch["enabled"],
-        automation_tripped=rate["tripped"], human_approved=human_approved,
+        automation_tripped=rate["tripped"], human_approved=human_approved, failure_source=incident.failure_source,
     )
     return ctx, risk
 

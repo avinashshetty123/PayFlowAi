@@ -34,6 +34,17 @@ async def _incident(txn: str) -> Incident | None:
         )
 
 
+async def _approve(txn: str):
+    """Four-eyes sign-off on the pending remediation (internal faults always need one)."""
+    incident = await _incident(txn)
+    assert incident.status == "AWAITING_APPROVAL", incident.status
+    assert incident.policy_decision == "HUMAN_APPROVAL_REQUIRED"
+    async with SessionLocal() as s:
+        action = await s.scalar(select(Action).where(Action.incident_id == incident.id, Action.status == "PENDING_APPROVAL"))
+    async with SessionLocal() as s:
+        return await approve_action(s, action.id, approver="ops.lead")
+
+
 async def _events(txn: str) -> list[str]:
     async with SessionLocal() as s:
         return list(await s.scalars(
@@ -149,8 +160,16 @@ async def test_realtime_ledger_mismatch_end_to_end(paypal, kb):
     assert incident.failure_source == "PAYFLOW_INFRASTRUCTURE_FAILURE"
     assert incident.injected_scenario == "LEDGER_WRITE_FAILURE"
     assert incident.initial_snapshot["gateway"] == "SUCCESS" and incident.initial_snapshot["ledger"] == "FAILED"
-    assert incident.status == "RESOLVED"
-    assert incident.policy_decision == "ALLOW"
+    assert incident.status == "AWAITING_APPROVAL"  # SYS-FAULT: PayFlow's own ledger failed
+    async with SessionLocal() as s:
+        policy = await s.scalar(select(AuditLog).where(AuditLog.incident_id == incident.id, AuditLog.event == "POLICY_EVALUATED"))
+    assert "SYS-FAULT" in policy.evidence["fired_rules"]
+    assert any(f["name"] == "PayFlow component failure" for f in incident.risk_factors["factors"])
+    assert (await _payment(txn)).ledger_status == "FAILED"  # nothing written before sign-off
+    outcome = await _approve(txn)
+    assert outcome.incident_status == "RESOLVED"
+    incident = await _incident(txn)
+    assert incident.resolution == "HUMAN_APPROVED"
 
     payment = await _payment(txn)
     assert payment.provider_status == "COMPLETED"  # PayPal's result was never altered
@@ -164,6 +183,7 @@ async def test_realtime_ledger_mismatch_end_to_end(paypal, kb):
     streamed = [e["event"] for e in local.recent if e.get("transactionId") == txn]
     for name in ("PAYMENT_CAPTURE_COMPLETED", "FAILURE_INJECTED", "RECONCILIATION_STARTED", "INCIDENT_CREATED",
                  "INVESTIGATION_STARTED", "INVESTIGATION_COMPLETED", "POLICY_EVALUATED", "ACTION_CREATED",
+                 "ACTION_AWAITING_APPROVAL",
                  "ACTION_EXECUTED", "VERIFICATION_STARTED", "VERIFICATION_COMPLETED", "INCIDENT_RESOLVED"):
         assert name in streamed, name
 
@@ -171,7 +191,7 @@ async def test_realtime_ledger_mismatch_end_to_end(paypal, kb):
 async def test_verification_timeout_is_retried(paypal, kb):
     txn = await _create_and_capture(paypal, failures=["LEDGER_WRITE_FAILURE", "VERIFICATION_TIMEOUT"])
     await run_job_chain("post_capture", (txn,), skip=TIMERS)
-    assert (await _incident(txn)).status == "RESOLVED"
+    assert (await _approve(txn)).incident_status == "RESOLVED"
     assert "VERIFICATION_RETRY" in await _events(txn)
 
 
@@ -181,7 +201,7 @@ async def test_other_downstream_injections_are_recovered(paypal, kb, scenario):
     await run_job_chain("post_capture", (txn,), skip=TIMERS)
     incident = await _incident(txn)
     assert incident.type == "LEDGER_MISMATCH" and incident.injected_scenario == scenario
-    assert incident.status == "RESOLVED"
+    assert (await _approve(txn)).incident_status == "RESOLVED"
     async with SessionLocal() as s:
         ledger = await s.scalar(select(LedgerEntry).where(LedgerEntry.payment_id == incident.payment_id))
     assert ledger.amount == Decimal("50.00")
@@ -196,7 +216,10 @@ async def test_post_capture_injection_via_api(paypal, client):
     assert response.status_code == 200, response.text
     assert response.json()["source"] == "PAYFLOW_DEMO_ENVIRONMENT"
     incident = await _incident(txn)
-    assert incident.injected_scenario == "LEDGER_WRITE_FAILURE" and incident.status == "RESOLVED"
+    assert incident.injected_scenario == "LEDGER_WRITE_FAILURE" and incident.status == "AWAITING_APPROVAL"
+    approvals = (await client.get("/api/actions", params={"view": "pending"})).json()
+    assert any(txn in json.dumps(a) for a in approvals)
+    assert (await _approve(txn)).incident_status == "RESOLVED"
 
     bad = await client.post("/api/failures/inject", json={"transaction_id": txn, "scenario": "NOT_A_SCENARIO"})
     assert bad.status_code == 400
@@ -323,7 +346,8 @@ async def test_dropped_webhook_detected_and_resynced_from_paypal(paypal, client)
     await run_job_chain("check_webhook_arrival", (txn,))  # grace period expired
     incident = await _incident(txn)
     assert incident.type == "WEBHOOK_LOST" and incident.injected_scenario == "WEBHOOK_DROP"
-    assert incident.status == "RESOLVED"
+    assert (await _payment(txn)).webhook_status != "RESYNCED"  # held for sign-off
+    assert (await _approve(txn)).incident_status == "RESOLVED"
     assert (await _payment(txn)).webhook_status == "RESYNCED"
     assert paypal.count("GET", r"/v2/checkout/orders/") >= 1
 
@@ -334,12 +358,19 @@ async def test_delayed_webhook_incident_then_late_delivery(paypal, client):
     order_id = (await _payment(txn)).provider_order_id
     await _deliver(client, paypal.capture_completed_event(order_id, "WH-DELAY"))
     incident = await _incident(txn)
-    assert incident.type == "WEBHOOK_DELAY" and incident.status == "RESOLVED"
+    assert incident.type == "WEBHOOK_DELAY" and incident.status == "AWAITING_APPROVAL"
 
+    # The held webhook is finally processed before anyone approves: systems agree again, so the
+    # incident self-heals and the pending approval is withdrawn (nothing executed, nothing stuck).
     async with SessionLocal() as s:
         row = await s.scalar(select(WebhookEvent).where(WebhookEvent.provider_event_id == "WH-DELAY"))
     await run_job_chain("deliver_delayed_webhook", (str(row.id),))
     assert (await _payment(txn)).webhook_status == "RECEIVED"
+    incident = await _incident(txn)
+    assert incident.status == "RESOLVED" and incident.resolution == "SELF_HEALED"
+    async with SessionLocal() as s:
+        statuses = set(await s.scalars(select(Action.status).where(Action.incident_id == incident.id)))
+    assert statuses == {"REJECTED"}
 
 
 async def test_duplicate_webhook_injection_is_idempotent(paypal, client):

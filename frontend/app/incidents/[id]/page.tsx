@@ -428,6 +428,7 @@ const ACTIVE = new Set(["ESCALATED", "OPEN", "AWAITING_APPROVAL", "INVESTIGATING
 const RESOLUTION_LABEL: Record<string, string> = {
   AUTOMATED: "Resolved autonomously", HUMAN_APPROVED: "Resolved after human approval", MANUAL: "Resolved manually",
   ACCEPTED_RISK: "Resolved with accepted risk", FALSE_POSITIVE: "Closed as false positive",
+  SELF_HEALED: "Self-healed: systems reconciled before approval",
 };
 
 function HumanResolution({ incident, onDone }: { incident: IncidentDetail; onDone: () => void }) {
